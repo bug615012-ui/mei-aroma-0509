@@ -10,6 +10,8 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
+    "firebase": "latest",
+"lucide-react": "latest",
     "@ai-sdk/gateway": "3.0.59",
     "@ai-sdk/openai": "3.0.37",
     "@ai-sdk/provider": "3.0.8",
