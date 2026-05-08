@@ -76,6 +76,11 @@ function BankInfoBox() {
 // 主程式入口
 // ==========================================
 export default function App() {
+  const now = new Date();
+// 格式化今天的日期為 YYYY-MM-DD，方便跟您的日期選單比較
+const todayString = now.toISOString().split('T')[0]; 
+// 獲取現在的小時與分鐘（例如 14:30 -> 14.5）
+const currentTime = now.getHours() + now.getMinutes() / 60;
   const [currentView, setCurrentView] = useState('book');
   const [members, setMembers] = useState({});
   const [settings, setSettings] = useState(INITIAL_SETTINGS);
