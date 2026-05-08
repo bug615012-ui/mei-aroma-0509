@@ -1,3 +1,7 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* 如果您想要保留一些基礎的質感，可以加上這幾行 */
+body {
+  @apply bg-stone-50 text-stone-800;
+  font-family: system-ui, -apple-system, sans-serif;
+}
