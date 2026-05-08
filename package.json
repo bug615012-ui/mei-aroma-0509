@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "firebase": "latest",
-"lucide-react": "latest",
+    "lucide-react": "latest",
     "@ai-sdk/gateway": "3.0.59",
     "@ai-sdk/openai": "3.0.37",
     "@ai-sdk/provider": "3.0.8",
@@ -32,7 +32,6 @@
     "clsx": "2.1.1",
     "cookie": "^1.0.2",
     "jose": "6.0.12",
-    "lucide-react": "0.528.0",
     "ms": "2.1.3",
     "next": "^16.0.10",
     "next-themes": "^0.4.6",
