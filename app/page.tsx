@@ -6,7 +6,7 @@ import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken }
 import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
 
 // ==========================================
-// 💡 上架提醒：請將下方的內容替換為您在 Firebase Console 取得的正式金鑰
+// 💡 Firebase 金鑰 (已保留您提供的設定)
 // ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyD61qTdz9nXgGXd6ew5WNIHxVBEXNPjmXA",
@@ -23,7 +23,6 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'mei-aroma-app';
 
-// 療程項目定義
 const SERVICES = [
   { id: 's1', title: '30分鐘 局部體驗', duration: 30, desc: '適合局部放鬆、快速紓壓、輕盈體驗。', price: 600 },
   { id: 's2', title: '1小時 慢活療癒療程', duration: 60, desc: '適合身心放鬆、舒緩疲憊、日常保養。', price: 1200 },
@@ -76,11 +75,6 @@ function BankInfoBox() {
 // 主程式入口
 // ==========================================
 export default function App() {
-  const now = new Date();
-// 格式化今天的日期為 YYYY-MM-DD，方便跟您的日期選單比較
-const todayString = now.toISOString().split('T')[0]; 
-// 獲取現在的小時與分鐘（例如 14:30 -> 14.5）
-const currentTime = now.getHours() + now.getMinutes() / 60;
   const [currentView, setCurrentView] = useState('book');
   const [members, setMembers] = useState({});
   const [settings, setSettings] = useState(INITIAL_SETTINGS);
@@ -215,33 +209,52 @@ function MobileTab({ active, onClick, icon, label }) {
 }
 
 // ==========================================
-// 預約流程元件
+// 預約流程元件 (修改重點在此)
 // ==========================================
 function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
   const [step, setStep] = useState(0); 
   const [bookingData, setBookingData] = useState({ service: null, date: '', time: '', name: '', phone: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // 獲取台灣現在時間的工具
+  const getTWNow = () => new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+  const todayStr = getTWNow().getFullYear() + '-' + String(getTWNow().getMonth() + 1).padStart(2, '0') + '-' + String(getTWNow().getDate()).padStart(2, '0');
+
   const getAvailableSlots = (dateString, durationMins) => {
     if (!dateString) return [];
+    
+    // 獲取當前台灣時間資訊
+    const nowTW = getTWNow();
+    const currentMins = nowTW.getHours() * 60 + nowTW.getMinutes();
+
     const date = new Date(dateString);
     const day = date.getDay(); 
     const isWeekend = day === 0 || day === 6;
+    
     const parseTime = (timeStr) => {
       const [h, m] = timeStr.split(':').map(Number);
       return h * 60 + m;
     };
+
     const startMins = isWeekend ? parseTime(settings.weekendStart || "10:00") : parseTime(settings.weekdayStart || "17:30"); 
     const endMins = isWeekend ? parseTime(settings.weekendEnd || "17:00") : parseTime(settings.weekdayEnd || "20:00");
     const breakStartMins = (isWeekend ? settings.weekendBreakStart : settings.weekdayBreakStart) ? parseTime(isWeekend ? settings.weekendBreakStart : settings.weekdayBreakStart) : null;
     const breakEndMins = (isWeekend ? settings.weekendBreakEnd : settings.weekdayBreakEnd) ? parseTime(isWeekend ? settings.weekendBreakEnd : settings.weekdayBreakEnd) : null;
+    
     const bookingsOnDate = bookings.filter(b => b.date === dateString);
     const closuresOnDate = specialClosures.filter(c => c.date === dateString);
     const slots = [];
+
     for (let t = startMins; (t + durationMins) <= endMins; t += 30) {
+      // 核心修改：如果是今天，過濾掉「現在時間 + 60 分鐘緩衝」之前的時段
+      if (dateString === todayStr && t < (currentMins + 60)) {
+        continue;
+      }
+
       const slotStart = t;
       const slotEnd = t + durationMins;
       let isOverlapping = false;
+
       if (breakStartMins !== null && breakEndMins !== null) {
         if (Math.max(slotStart, breakStartMins) < Math.min(slotEnd, breakEndMins)) isOverlapping = true;
       }
@@ -331,16 +344,20 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
               </div>
               <div className="space-y-1 text-left">
                 <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">1. 請先點選日期</div>
-                <input type="date" min={new Date().toISOString().split('T')[0]} value={bookingData.date} onChange={(e) => setBookingData({...bookingData, date: e.target.value, time: ''})} className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-black" />
+                <input type="date" min={todayStr} value={bookingData.date} onChange={(e) => setBookingData({...bookingData, date: e.target.value, time: ''})} className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-black" />
               </div>
             </div>
             {bookingData.date && (
               <div className="space-y-3 animate-in fade-in slide-in-from-top-2 text-left">
                 <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">2. 請選擇時段</div>
                 <div className="grid grid-cols-3 gap-2">
-                  {getAvailableSlots(bookingData.date, bookingData.service?.duration).map(slot => (
-                    <button key={slot} onClick={() => setBookingData({...bookingData, time: slot})} className={`py-4 rounded-xl border-2 text-xs font-black transition-all ${bookingData.time === slot ? 'bg-green-700 text-white border-green-700 shadow-md scale-95' : 'bg-white text-gray-400 border-gray-50'}`}>{slot}</button>
-                  ))}
+                  {getAvailableSlots(bookingData.date, bookingData.service?.duration).length > 0 ? (
+                    getAvailableSlots(bookingData.date, bookingData.service?.duration).map(slot => (
+                      <button key={slot} onClick={() => setBookingData({...bookingData, time: slot})} className={`py-4 rounded-xl border-2 text-xs font-black transition-all ${bookingData.time === slot ? 'bg-green-700 text-white border-green-700 shadow-md scale-95' : 'bg-white text-gray-400 border-gray-50'}`}>{slot}</button>
+                    ))
+                  ) : (
+                    <div className="col-span-3 py-8 text-center text-gray-300 font-bold italic text-sm">該日已無可預約時段</div>
+                  )}
                 </div>
               </div>
             )}
