@@ -459,7 +459,7 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
             <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mx-auto text-white shadow-2xl"><CheckCircle size={48} strokeWidth={3}/></div>
             <h2 className="text-3xl font-black text-gray-900">預約成功</h2>
             <BankInfoBox />
-            <a href={`https://line.me/R/oaMessage/@222lfbsc/?${encodeURIComponent(`小玫老師好！我已預約：\n項目：${bookingData.service?.title}\n時間：${bookingData.date} ${bookingData.time}\n(我已匯款，後五碼為：____)`)}`} target="_blank" rel="noreferrer" className="w-full bg-[#06C755] text-white font-black py-5 rounded-2xl shadow-xl flex justify-center items-center gap-3">
+            <a href={`https://line.me/R/oaMessage/@222lfbsc/?${encodeURIComponent(`小玫老師好！我已預約：\n姓名：${bookingData.name}\n項目：${bookingData.service?.title}\n時間：${bookingData.date} ${bookingData.time}\n(我已匯款，後五碼為：____)`)}`} target="_blank" rel="noreferrer" className="w-full bg-[#06C755] text-white font-black py-5 rounded-2xl shadow-xl flex justify-center items-center gap-3">
               通知小玫老師
             </a>
             <button onClick={() => { setStep(0); setBookingData({ service: null, date: '', time: '', name: '', phone: '' }); }} className="text-gray-300 font-bold underline text-sm">返回預約首頁</button>
