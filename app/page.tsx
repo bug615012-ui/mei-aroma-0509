@@ -2,11 +2,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Leaf, CalendarDays, Clock, User, Phone, CheckCircle, Info, CreditCard, Ticket, Settings, ArrowRight, Wallet, Lock, Link as LinkIcon, Trash2, Calendar, Edit2, Save, X, Loader2, AlertCircle, Plus, Minus, CalendarX, ChevronRight, LogOut, Search, BarChart3, ChevronLeft } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc, addDoc } from 'firebase/firestore';
 
 // ==========================================
-// 💡 Firebase 金鑰 (已保留您提供的設定)
+// 💡 Firebase 初始化與路徑設定 (鎖定為您的專屬專案)
 // ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyD61qTdz9nXgGXd6ew5WNIHxVBEXNPjmXA",
@@ -17,11 +17,12 @@ const firebaseConfig = {
   appId: "1:805080020583:web:0088e93445682c4e6046c2",
   measurementId: "G-2MP5QK553Q"
 };
-
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'mei-aroma-app';
+
+// 關鍵修正：強制固定 appId，避免環境變數注入斜線導致路徑段數錯誤，確保讀取您專屬的資料
+const appId = 'mei-aroma-app';
 
 const SERVICES = [
   { id: 's1', title: '30分鐘 局部體驗', duration: 30, desc: '適合局部放鬆、快速紓壓、輕盈體驗。', price: 600 },
@@ -39,6 +40,12 @@ const INITIAL_SETTINGS = {
   weekendBreakStart: '',
   weekendBreakEnd: '',
   googleScriptUrl: '' 
+};
+
+// 獲取台灣今日日期字串 YYYY-MM-DD
+const getTWTodayStr = () => {
+  const now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
 };
 
 // ==========================================
@@ -86,18 +93,25 @@ export default function App() {
   const [toast, setToast] = useState(null);
 
   const showToast = (message, type = 'success') => {
-    setToast({ message, type });
+    let displayMessage = "發生未知錯誤";
+    if (typeof message === 'string') {
+      displayMessage = message;
+    } else if (message instanceof Error) {
+      displayMessage = message.message;
+    } else if (message && typeof message === 'object' && message.message) {
+      displayMessage = message.message;
+    } else {
+      displayMessage = String(message);
+    }
+    setToast({ message: displayMessage, type });
     setTimeout(() => setToast(null), 3000);
   };
 
+  // (1) 初始化身分驗證 (直接使用匿名登入，對應您的個人 Firebase 專案)
   useEffect(() => {
     const initAuth = async () => {
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
+        await signInAnonymously(auth);
       } catch (error) {
         console.error("Auth Error:", error);
       }
@@ -107,28 +121,51 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // (2) 數據監聽邏輯
   useEffect(() => {
-    if (!user) return;
-    const unsubMembers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'members'), (snap) => {
+    if (!user) return; 
+    
+    let isMounted = true;
+    const publicPath = (coll) => collection(db, 'artifacts', appId, 'public', 'data', coll);
+
+    const unsubMembers = onSnapshot(publicPath('members'), (snap) => {
+      if (!isMounted) return;
       const data = {};
       snap.forEach(d => data[d.id] = d.data());
       setMembers(data);
-    });
+    }, (err) => console.error("Firestore Members Error:", err));
+
     const unsubSettings = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), (docSnap) => {
+      if (!isMounted) return;
       if (docSnap.exists()) setSettings(prev => ({ ...prev, ...docSnap.data() }));
-      setIsLoading(false);
+      setIsLoading(false); // 成功取得資料後解鎖畫面
+    }, (err) => {
+      console.error("Firestore Settings Error:", err);
+      if (isMounted) setIsLoading(false); // 即便權限被擋，也要強制解鎖畫面確保按鈕可點
     });
-    const unsubBookings = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'bookings'), (snap) => {
+
+    const unsubBookings = onSnapshot(publicPath('bookings'), (snap) => {
+      if (!isMounted) return;
       const data = [];
       snap.forEach(d => data.push({ id: d.id, ...d.data() }));
       setBookings(data);
-    });
-    const unsubClosures = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'special_closures'), (snap) => {
+    }, (err) => console.error("Firestore Bookings Error:", err));
+
+    const unsubClosures = onSnapshot(publicPath('special_closures'), (snap) => {
+      if (!isMounted) return;
       const data = [];
       snap.forEach(d => data.push({ id: d.id, ...d.data() }));
       setSpecialClosures(data);
-    });
+    }, (err) => console.error("Firestore Closures Error:", err));
+
+    // 安全防護機制：如果 Firebase 連線異常，2.5 秒後強制隱藏 Loading，避免網頁凍結
+    const safetyTimeout = setTimeout(() => {
+      if (isMounted) setIsLoading(false);
+    }, 2500);
+
     return () => {
+      isMounted = false;
+      clearTimeout(safetyTimeout);
       unsubMembers(); unsubSettings(); unsubBookings(); unsubClosures();
     };
   }, [user]);
@@ -137,7 +174,7 @@ export default function App() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-[#F8FAF8] text-green-600">
         <Loader2 className="animate-spin mb-4" size={40} />
-        <p className="font-bold tracking-widest text-sm text-center px-4">系統安全連線中...</p>
+        <p className="font-bold tracking-widest text-sm text-center px-4">正在載入專屬空間...</p>
       </div>
     );
   }
@@ -209,52 +246,40 @@ function MobileTab({ active, onClick, icon, label }) {
 }
 
 // ==========================================
-// 預約流程元件 (修改重點在此)
+// 預約流程元件
 // ==========================================
 function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
   const [step, setStep] = useState(0); 
   const [bookingData, setBookingData] = useState({ service: null, date: '', time: '', name: '', phone: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // 獲取台灣現在時間的工具
+  const todayStr = getTWTodayStr();
   const getTWNow = () => new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
-  const todayStr = getTWNow().getFullYear() + '-' + String(getTWNow().getMonth() + 1).padStart(2, '0') + '-' + String(getTWNow().getDate()).padStart(2, '0');
 
   const getAvailableSlots = (dateString, durationMins) => {
     if (!dateString) return [];
-    
-    // 獲取當前台灣時間資訊
     const nowTW = getTWNow();
     const currentMins = nowTW.getHours() * 60 + nowTW.getMinutes();
-
     const date = new Date(dateString);
     const day = date.getDay(); 
     const isWeekend = day === 0 || day === 6;
-    
     const parseTime = (timeStr) => {
       const [h, m] = timeStr.split(':').map(Number);
       return h * 60 + m;
     };
-
     const startMins = isWeekend ? parseTime(settings.weekendStart || "10:00") : parseTime(settings.weekdayStart || "17:30"); 
     const endMins = isWeekend ? parseTime(settings.weekendEnd || "17:00") : parseTime(settings.weekdayEnd || "20:00");
     const breakStartMins = (isWeekend ? settings.weekendBreakStart : settings.weekdayBreakStart) ? parseTime(isWeekend ? settings.weekendBreakStart : settings.weekdayBreakStart) : null;
     const breakEndMins = (isWeekend ? settings.weekendBreakEnd : settings.weekdayBreakEnd) ? parseTime(isWeekend ? settings.weekendBreakEnd : settings.weekdayBreakEnd) : null;
-    
     const bookingsOnDate = bookings.filter(b => b.date === dateString);
     const closuresOnDate = specialClosures.filter(c => c.date === dateString);
     const slots = [];
 
     for (let t = startMins; (t + durationMins) <= endMins; t += 30) {
-      // 核心修改：如果是今天，過濾掉「現在時間 + 60 分鐘緩衝」之前的時段
-      if (dateString === todayStr && t < (currentMins + 60)) {
-        continue;
-      }
-
+      if (dateString === todayStr && t < (currentMins + 60)) continue;
       const slotStart = t;
       const slotEnd = t + durationMins;
       let isOverlapping = false;
-
       if (breakStartMins !== null && breakEndMins !== null) {
         if (Math.max(slotStart, breakStartMins) < Math.min(slotEnd, breakEndMins)) isOverlapping = true;
       }
@@ -280,21 +305,29 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
   };
 
   const handleBookingSubmit = async () => {
-    if (!user) return;
+    if (!user) {
+      showToast('系統安全連線中，請稍候重試', 'error');
+      return;
+    }
     setIsSubmitting(true);
     try {
       if (settings.googleScriptUrl) {
         const fd = new FormData();
         fd.append('type', 'booking'); fd.append('name', bookingData.name); fd.append('phone', bookingData.phone);
         fd.append('service', bookingData.service.title); fd.append('date', bookingData.date); fd.append('time', bookingData.time);
-        await fetch(settings.googleScriptUrl, { method: 'POST', body: fd, mode: 'no-cors' });
+        fetch(settings.googleScriptUrl, { method: 'POST', body: fd, mode: 'no-cors' }).catch(console.error);
       }
-      await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'bookings')), {
-        ...bookingData, service: bookingData.service.title, duration: bookingData.service.duration, timestamp: new Date().toISOString()
+      
+      const bookingsRef = collection(db, 'artifacts', appId, 'public', 'data', 'bookings');
+      await addDoc(bookingsRef, {
+        ...bookingData, 
+        service: bookingData.service.title, 
+        duration: bookingData.service.duration, 
+        timestamp: new Date().toISOString()
       });
-      showToast('預約成功，期待見面！');
+      showToast('預約成功，期待您的到來！');
       setStep(4); 
-    } catch (e) { showToast('系統忙線中，請稍後再試', 'error'); } 
+    } catch (e) { showToast(e, 'error'); } 
     finally { setIsSubmitting(false); }
   };
 
@@ -351,13 +384,9 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
               <div className="space-y-3 animate-in fade-in slide-in-from-top-2 text-left">
                 <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">2. 請選擇時段</div>
                 <div className="grid grid-cols-3 gap-2">
-                  {getAvailableSlots(bookingData.date, bookingData.service?.duration).length > 0 ? (
-                    getAvailableSlots(bookingData.date, bookingData.service?.duration).map(slot => (
-                      <button key={slot} onClick={() => setBookingData({...bookingData, time: slot})} className={`py-4 rounded-xl border-2 text-xs font-black transition-all ${bookingData.time === slot ? 'bg-green-700 text-white border-green-700 shadow-md scale-95' : 'bg-white text-gray-400 border-gray-50'}`}>{slot}</button>
-                    ))
-                  ) : (
-                    <div className="col-span-3 py-8 text-center text-gray-300 font-bold italic text-sm">該日已無可預約時段</div>
-                  )}
+                  {getAvailableSlots(bookingData.date, bookingData.service?.duration).map(slot => (
+                    <button key={slot} onClick={() => setBookingData({...bookingData, time: slot})} className={`py-4 rounded-xl border-2 text-xs font-black transition-all ${bookingData.time === slot ? 'bg-green-700 text-white border-green-700 shadow-md scale-95' : 'bg-white text-gray-400 border-gray-50'}`}>{slot}</button>
+                  ))}
                 </div>
               </div>
             )}
@@ -373,11 +402,11 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
             <h2 className="text-xl font-black text-gray-900 text-center">確認資料</h2>
             <div className="space-y-4">
               <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-300 uppercase tracking-widest px-2">您的姓名</label>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">您的姓名</label>
                 <input type="text" placeholder="例：林植感" value={bookingData.name} onChange={(e) => setBookingData({...bookingData, name: e.target.value})} className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-black" />
               </div>
               <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-300 uppercase tracking-widest px-2">聯絡電話</label>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">聯絡電話</label>
                 <input type="tel" placeholder="0912..." value={bookingData.phone} onChange={(e) => setBookingData({...bookingData, phone: e.target.value})} className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-black" />
               </div>
             </div>
@@ -399,14 +428,14 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
         )}
 
         {step === 4 && (
-          <div className="space-y-8 text-center animate-in zoom-in fade-in">
+          <div className="space-y-8 text-center animate-in zoom-in duration-300">
             <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mx-auto text-white shadow-2xl"><CheckCircle size={48} strokeWidth={3}/></div>
             <h2 className="text-3xl font-black text-gray-900">預約成功</h2>
             <BankInfoBox />
             <a href={`https://line.me/R/oaMessage/@222lfbsc/?${encodeURIComponent(`小玫老師好！我已預約：\n項目：${bookingData.service?.title}\n時間：${bookingData.date} ${bookingData.time}\n(我已匯款，後五碼為：____)`)}`} target="_blank" rel="noreferrer" className="w-full bg-[#06C755] text-white font-black py-5 rounded-2xl shadow-xl flex justify-center items-center gap-3">
               通知小玫老師
             </a>
-            <button onClick={() => { setStep(0); setBookingData({ service: null, date: '', time: '', name: '', phone: '' }); }} className="text-gray-300 font-bold underline text-sm">返回首頁</button>
+            <button onClick={() => { setStep(0); setBookingData({ service: null, date: '', time: '', name: '', phone: '' }); }} className="text-gray-300 font-bold underline text-sm">返回預約首頁</button>
           </div>
         )}
       </div>
@@ -414,9 +443,6 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
   );
 }
 
-// ==========================================
-// 會員與預約查詢
-// ==========================================
 function MemberPortal({ members, bookings }) {
   const [phone, setPhone] = useState('');
   const [data, setData] = useState(null);
@@ -428,14 +454,14 @@ function MemberPortal({ members, bookings }) {
 
   const handleSearch = () => {
     setIsSearching(true);
+    setError('');
     setTimeout(() => {
       const foundMember = members[phone];
-      const foundBookings = bookings.filter(b => b.phone === phone && new Date(`${b.date}T${b.time}:00`) >= new Date()).sort((a,b) => new Date(`${a.date}T${a.time}`) - new Date(`${b.date}T${b.time}`));
+      const foundBookings = bookings.filter(b => b.phone === phone && new Date(`${b.date}T${b.time}:00`) >= new Date()).sort((a,b) => new Date(`${a.date}T${a.time}`).getTime() - new Date(`${b.date}T${b.time}`).getTime());
       
       if (foundMember || foundBookings.length > 0) { 
         setData(foundMember || { name: '預約客戶', balance: 0, sessions: 0 }); 
         setUserBookings(foundBookings);
-        setError('');
         setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
       } else { 
         setData(null); 
@@ -460,7 +486,7 @@ function MemberPortal({ members, bookings }) {
             <input type="tel" placeholder="0912..." value={phone} onChange={(e) => setPhone(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-black text-lg transition-all" />
           </div>
           <button onClick={handleSearch} disabled={isSearching} className="bg-gray-900 text-white px-8 py-4 rounded-2xl font-black shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2">
-            {isSearching ? <Loader2 className="animate-spin" size={18} /> : '查詢我的預約'}
+            {isSearching ? <Loader2 className="animate-spin" size={18} /> : '查詢我的資料'}
           </button>
         </div>
         {error && <div className="text-red-500 text-xs font-bold text-center bg-red-50 py-3 px-4 rounded-xl border border-red-100">{error}</div>}
@@ -468,20 +494,18 @@ function MemberPortal({ members, bookings }) {
 
       {data && (
         <div ref={resultRef} className="animate-in fade-in slide-in-from-bottom-8 space-y-6">
-          {members[phone] && (
-            <div className="grid grid-cols-2 gap-3 text-center">
-              <div className="bg-green-700 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden group">
-                <Wallet size={20} className="mb-4 opacity-40 mx-auto" />
-                <p className="text-[9px] font-black opacity-50 uppercase mb-1 tracking-widest">儲值餘額</p>
-                <p className="text-3xl font-black tracking-tighter">${data.balance.toLocaleString()}</p>
-              </div>
-              <div className="bg-orange-500 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden group">
-                <Ticket size={20} className="mb-4 opacity-40 mx-auto" />
-                <p className="text-[9px] font-black opacity-50 uppercase mb-1 tracking-widest">包堂剩餘</p>
-                <p className="text-3xl font-black tracking-tighter">{data.sessions}<small className="text-xs ml-1 opacity-50 font-medium">堂</small></p>
-              </div>
+          <div className="grid grid-cols-2 gap-3 text-center">
+            <div className="bg-green-700 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden group">
+              <Wallet size={20} className="mb-4 opacity-40 mx-auto" />
+              <p className="text-[9px] font-black opacity-50 uppercase mb-1 tracking-widest">儲值餘額</p>
+              <p className="text-3xl font-black tracking-tighter">${Number(data.balance || 0).toLocaleString()}</p>
             </div>
-          )}
+            <div className="bg-orange-500 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden group">
+              <Ticket size={20} className="mb-4 opacity-40 mx-auto" />
+              <p className="text-[9px] font-black opacity-50 uppercase mb-1 tracking-widest">包堂剩餘</p>
+              <p className="text-3xl font-black tracking-tighter">{Number(data.sessions || 0)}<small className="text-xs ml-1 opacity-50 font-medium">堂</small></p>
+            </div>
+          </div>
 
           <div className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-4">
             <h3 className="font-black text-gray-900 flex items-center gap-2 border-b border-gray-50 pb-3 text-left"><Calendar size={20} className="text-green-600"/> 您即將進行的預約</h3>
@@ -492,10 +516,10 @@ function MemberPortal({ members, bookings }) {
             ) : (
               <div className="space-y-3">
                 {userBookings.map(b => (
-                  <div key={b.id} className="bg-gray-50 p-4 rounded-3xl border border-gray-100 flex justify-between items-center group">
+                  <div key={b.id} className="bg-gray-50 p-4 rounded-3xl border border-gray-100 flex justify-between items-center group transition-all">
                     <div className="text-left">
-                      <div className="text-[10px] font-black text-green-600 uppercase mb-1">{b.service}</div>
-                      <div className="font-black text-gray-900 tracking-tight">{b.date} <span className="text-orange-500 ml-1">{b.time}</span></div>
+                      <div className="text-[10px] font-black text-green-600 uppercase mb-1">{typeof b.service === 'object' ? b.service.title : String(b.service || '')}</div>
+                      <div className="font-black text-gray-900 tracking-tight">{String(b.date || '')} <span className="text-orange-500 ml-1">{String(b.time || '')}</span></div>
                     </div>
                     <div className="bg-white p-2 rounded-xl text-green-600"><ChevronRight size={16}/></div>
                   </div>
@@ -515,9 +539,6 @@ function MemberPortal({ members, bookings }) {
   );
 }
 
-// ==========================================
-// 管理後台
-// ==========================================
 function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuthenticated, setIsAdminAuthenticated, user, showToast }) {
   const [adminTab, setAdminTab] = useState('bookings'); 
   const [newM, setNewM] = useState({ phone: '', name: '', balance: 0, sessions: 0 });
@@ -525,22 +546,22 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
   const [pwd, setPwd] = useState('');
   const [authErr, setAuthErr] = useState('');
   const [isS, setIsS] = useState(false);
-  const [isA, setIsA] = useState(false);
   const [delC, setDelC] = useState(null); 
   const [newC, setNewC] = useState({ date: '', start: '', end: '' });
   const [calendarDate, setCalendarDate] = useState(new Date());
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [reportDate, setReportDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState(getTWTodayStr());
+  const [editingBooking, setEditingBooking] = useState(null);
 
   useEffect(() => { setLocalS(settings); }, [settings]);
 
   if (!isAdminAuthenticated) {
     return (
-      <div className="max-w-md mx-auto mt-10 bg-white p-10 rounded-[3rem] shadow-sm border border-gray-50 text-center animate-in fade-in zoom-in space-y-6">
+      <div className="max-w-md mx-auto mt-10 bg-white p-10 rounded-[3rem] shadow-sm border border-gray-100 text-center animate-in fade-in zoom-in space-y-6">
         <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto text-gray-300"><Lock size={36}/></div>
-        <h2 className="text-2xl font-black italic">後台驗證</h2>
-        <input type="password" value={pwd} onChange={(e) => setPwd(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && (pwd === '8011' ? setIsAdminAuthenticated(true) : setAuthErr('密碼錯誤'))} className="w-full px-4 py-5 bg-gray-50 border-none rounded-2xl outline-none text-center text-4xl tracking-[0.5em] font-black" placeholder="****" />
-        <button onClick={() => (pwd === '8011' ? setIsAdminAuthenticated(true) : setAuthErr('密碼錯誤'))} className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl shadow-xl">進入系統</button>
+        <h2 className="text-2xl font-black italic">管理後台驗證</h2>
+        <input type="password" value={pwd} onChange={(e) => setPwd(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && (pwd === '8011' ? setIsAdminAuthenticated(true) : setAuthErr('密碼錯誤'))} className="w-full px-4 py-5 bg-gray-50 border-none rounded-2xl outline-none text-center text-4xl tracking-[0.5em] font-black focus:ring-2 focus:ring-green-500" placeholder="****" />
+        <button onClick={() => (pwd === '8011' ? setIsAdminAuthenticated(true) : setAuthErr('密碼錯誤'))} className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition-all">登入系統</button>
         {authErr && <p className="text-red-500 text-[10px] font-black uppercase tracking-widest">{authErr}</p>}
       </div>
     );
@@ -565,41 +586,113 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
     const upd = { ...m, [f]: nV };
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'members', phone), upd, { merge: true });
+      
+      // --- 新增：同步儲值金與包堂數的異動至 Google Script ---
+      if (settings.googleScriptUrl) {
+        const fd = new FormData();
+        fd.append('type', 'member_update'); // 標記這是一筆會員更新
+        fd.append('name', m.name);
+        fd.append('phone', phone);
+        fd.append('field', f === 'balance' ? '儲值金' : '包堂數'); // 告知異動的欄位
+        fd.append('change', amt); // 異動數值 (如: 100, -1)
+        fd.append('balance', f === 'balance' ? nV : (m.balance || 0)); // 更新後的儲值金餘額
+        fd.append('sessions', f === 'sessions' ? nV : (m.sessions || 0)); // 更新後的包堂餘額
+        fetch(settings.googleScriptUrl, { method: 'POST', body: fd, mode: 'no-cors' }).catch(console.error);
+      }
+      // --------------------------------------------------
+
       showToast('資料已成功更新');
     } catch (e) { showToast('更新失敗', 'error'); }
   };
 
   const handleDeleteItem = async (type, id) => {
-    const collectionName = type === 'member' ? 'members' : type === 'booking' ? 'bookings' : 'special_closures';
+    const colName = type === 'member' ? 'members' : type === 'booking' ? 'bookings' : 'special_closures';
     try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', collectionName, id));
-      showToast('已成功移除');
-    } catch (e) { showToast('移除失敗', 'error'); }
+      const itemRef = doc(db, 'artifacts', appId, 'public', 'data', colName, id);
+      await deleteDoc(itemRef);
+      showToast('資料已成功移除');
+    } catch (e) { showToast(e, 'error'); }
+  };
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    if (!editingBooking) return;
+    try {
+      const { id, ...updatedData } = editingBooking;
+      const srv = SERVICES.find(s => s.title === updatedData.service);
+      if (srv) updatedData.duration = srv.duration;
+      const bookingRef = doc(db, 'artifacts', appId, 'public', 'data', 'bookings', id);
+      await updateDoc(bookingRef, updatedData);
+      showToast('預約資訊已修正');
+      setEditingBooking(null);
+    } catch (e) { showToast(e, 'error'); }
   };
 
   const reportYear = reportDate.getFullYear();
   const reportMonth = reportDate.getMonth();
   const filteredBookings = bookings.filter(b => b.date && new Date(b.date).getFullYear() === reportYear && new Date(b.date).getMonth() === reportMonth);
-  const totalRevenue = filteredBookings.reduce((sum, b) => sum + (SERVICES.find(s => s.title === b.service)?.price || 0), 0);
+  const totalRev = filteredBookings.reduce((sum, b) => sum + (SERVICES.find(s => s.title === b.service)?.price || 0), 0);
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in pb-32 text-left">
+      {/* 移除確認彈窗 */}
       {delC && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[1000] flex items-center justify-center p-6">
-          <div className="bg-white p-10 rounded-[3rem] shadow-2xl max-w-sm w-full text-center space-y-6">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[1000] flex items-center justify-center p-6 text-center">
+          <div className="bg-white p-10 rounded-[3rem] shadow-2xl max-w-sm w-full space-y-6">
             <div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto"><Trash2 size={32}/></div>
-            <h3 className="text-xl font-black text-gray-900 tracking-tighter">確定要移除嗎？</h3>
+            <h3 className="text-xl font-black text-gray-900 tracking-tighter">確認要刪除這筆資料嗎？</h3>
             <div className="flex gap-2">
-              <button onClick={() => setDelC(null)} className="flex-1 py-4 bg-gray-50 rounded-2xl font-bold text-gray-400 text-xs uppercase text-center">取消</button>
-              <button onClick={() => { handleDeleteItem(delC.type, delC.id); setDelC(null); }} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-black text-xs shadow-lg uppercase text-center">執行</button>
+              <button onClick={() => setDelC(null)} className="flex-1 py-4 bg-gray-50 rounded-2xl font-bold text-gray-400 text-xs uppercase">取消</button>
+              <button onClick={() => { handleDeleteItem(delC.type, delC.id); setDelC(null); }} className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-black text-xs shadow-lg uppercase">確認執行</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 編輯預約彈窗 */}
+      {editingBooking && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[1000] flex items-center justify-center p-6">
+          <div className="bg-white p-8 md:p-10 rounded-[3rem] shadow-2xl max-w-md w-full animate-in zoom-in duration-300">
+            <div className="flex justify-between items-center mb-6 border-b border-gray-50 pb-4">
+              <h3 className="text-xl font-black text-gray-900 flex items-center gap-2"><Edit2 size={20} className="text-green-600"/> 編輯預約詳情</h3>
+              <button onClick={() => setEditingBooking(null)} className="p-2 bg-gray-50 rounded-full text-gray-400 hover:bg-gray-100 transition-all"><X size={20}/></button>
+            </div>
+            <form onSubmit={handleEditSubmit} className="space-y-5">
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">姓名 Name</label>
+                <input type="text" value={editingBooking.name} onChange={e => setEditingBooking({...editingBooking, name: e.target.value})} className="w-full px-5 py-3.5 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-bold" />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">電話 Phone</label>
+                <input type="tel" value={editingBooking.phone} onChange={e => setEditingBooking({...editingBooking, phone: e.target.value})} className="w-full px-5 py-3.5 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-bold" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">日期 Date</label>
+                  <input type="date" value={editingBooking.date} onChange={e => setEditingBooking({...editingBooking, date: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-bold text-sm" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">時間 Time</label>
+                  <input type="time" value={editingBooking.time} onChange={e => setEditingBooking({...editingBooking, time: e.target.value})} className="w-full px-4 py-3 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-bold text-sm" />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">服務項目 Service</label>
+                <select value={editingBooking.service} onChange={e => setEditingBooking({...editingBooking, service: e.target.value})} className="w-full px-5 py-3.5 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-bold text-sm">
+                  {SERVICES.map(s => <option key={s.id} value={s.title}>{s.title}</option>)}
+                </select>
+              </div>
+              <button type="submit" className="w-full bg-green-700 text-white font-black py-4 rounded-2xl shadow-xl shadow-green-100 flex justify-center items-center gap-2 mt-4 active:scale-95 transition-all">
+                <Save size={18}/> 儲存預約變更
+              </button>
+            </form>
           </div>
         </div>
       )}
 
       <div className="flex justify-between items-center px-2 text-left">
         <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter underline decoration-green-400 decoration-4">Admin Console</h2>
-        <button onClick={() => setIsAdminAuthenticated(false)} className="text-[10px] font-black text-red-400 bg-red-50 px-4 py-2 rounded-xl border border-red-100">登出</button>
+        <button onClick={() => setIsAdminAuthenticated(false)} className="text-[10px] font-black text-red-400 bg-red-50 px-4 py-2 rounded-xl border border-red-100">登出系統</button>
       </div>
 
       <div className="flex bg-white p-1 rounded-2xl border border-gray-100 shadow-sm overflow-x-auto no-scrollbar font-black">
@@ -613,19 +706,18 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
         <div className="space-y-6 animate-in fade-in">
           <div className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
             <div className="flex items-center justify-between">
-              <button onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1))} className="p-2 bg-gray-50 rounded-xl transition-all"><ChevronLeft size={20}/></button>
+              <button onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1))} className="p-2 bg-gray-50 rounded-xl transition-all hover:bg-gray-100"><ChevronLeft size={20}/></button>
               <h3 className="font-black text-lg">{calendarDate.getFullYear()}年 {calendarDate.getMonth() + 1}月</h3>
-              <button onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1))} className="p-2 bg-gray-50 rounded-xl transition-all"><ChevronRight size={20}/></button>
+              <button onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1))} className="p-2 bg-gray-50 rounded-xl transition-all hover:bg-gray-100"><ChevronRight size={20}/></button>
             </div>
-
             <div className="grid grid-cols-7 gap-1 text-center font-black">
               {['日','一','二','三','四','五','六'].map(d => <div key={d} className="text-[10px] text-gray-300 py-2">{d}</div>)}
               {generateCalendar().map((date, idx) => {
                 const dayBookings = bookings.filter(b => b.date === date);
                 const isSelected = selectedDate === date;
-                const isToday = date === new Date().toISOString().split('T')[0];
+                const isToday = date === getTWTodayStr();
                 return (
-                  <div key={idx} onClick={() => date && setSelectedDate(date)} className={`relative aspect-square flex flex-col items-center justify-center rounded-2xl cursor-pointer transition-all border-2 ${!date ? 'opacity-0' : ''} ${isSelected ? 'bg-green-600 border-green-600 text-white shadow-lg' : 'bg-gray-50/50 border-transparent hover:border-gray-100'} ${isToday && !isSelected ? 'text-green-600' : ''}`}>
+                  <div key={idx} onClick={() => date && setSelectedDate(date)} className={`relative aspect-square flex flex-col items-center justify-center rounded-2xl cursor-pointer transition-all border-2 ${!date ? 'opacity-0' : ''} ${isSelected ? 'bg-green-600 border-green-600 text-white shadow-lg' : 'bg-gray-50/50 border-transparent hover:border-gray-100'} ${isToday && !isSelected ? 'text-green-600 border-green-100' : ''}`}>
                     <span className="text-xs font-black">{date ? date.split('-')[2] : ''}</span>
                     {dayBookings.length > 0 && <div className={`mt-0.5 px-1 rounded-full text-[8px] ${isSelected ? 'bg-white text-green-700' : 'bg-green-600 text-white'}`}>{dayBookings.length}</div>}
                   </div>
@@ -633,21 +725,23 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
               })}
             </div>
           </div>
-
-          <div className="bg-white p-6 md:p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-4">
-            <h4 className="font-black text-gray-900 border-b border-gray-50 pb-4 flex items-center gap-2"><Clock size={18} className="text-green-600"/> {selectedDate} 預約詳情</h4>
+          <div className="bg-white p-6 md:p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-4 text-left">
+            <h4 className="font-black text-gray-900 border-b border-gray-50 pb-4 flex items-center gap-2"><Clock size={18} className="text-green-600"/> {selectedDate} 預約明細</h4>
             <div className="space-y-3">
-              {bookings.filter(b => b.date === selectedDate).length === 0 ? <p className="text-center text-gray-300 py-10 font-bold italic text-left">該日尚無預約</p> : 
-                bookings.filter(b => b.date === selectedDate).sort((a,b) => a.time.localeCompare(b.time)).map(b => (
+              {bookings.filter(b => b.date === selectedDate).length === 0 ? <p className="text-center text-gray-300 py-10 font-bold italic">該日尚無預約紀錄</p> : 
+                bookings.filter(b => b.date === selectedDate).sort((a,b) => String(a.time || '').localeCompare(String(b.time || ''))).map(b => (
                 <div key={b.id} className="p-4 bg-gray-50 rounded-3xl border border-gray-100 flex justify-between items-center group transition-all">
                   <div className="flex gap-4 items-center">
-                    <div className="text-lg font-black text-green-600 w-14 text-left">{b.time}</div>
+                    <div className="text-lg font-black text-green-600 w-14 text-left">{String(b.time || '')}</div>
                     <div className="text-left">
-                      <div className="font-black text-gray-900 text-sm">{b.name} <span className="text-[10px] opacity-30 font-mono ml-1">{b.phone}</span></div>
-                      <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest bg-white px-2 py-0.5 rounded border border-gray-100 mt-1 inline-block">{b.service}</div>
+                      <div className="font-black text-gray-900 text-sm">{typeof b.name === 'object' ? JSON.stringify(b.name) : String(b.name || '')} <span className="text-[10px] opacity-30 font-mono ml-1">{String(b.phone || '')}</span></div>
+                      <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest bg-white px-2 py-0.5 rounded border border-gray-100 mt-1 inline-block">{typeof b.service === 'object' ? b.service.title : String(b.service || '')}</div>
                     </div>
                   </div>
-                  <button onClick={() => setDelC({type:'booking', id: b.id})} className="p-3 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
+                  <div className="flex gap-1">
+                    <button onClick={() => setEditingBooking(b)} className="p-3 text-gray-300 hover:text-green-600 transition-colors"><Edit2 size={18}/></button>
+                    <button onClick={() => setDelC({type:'booking', id: b.id})} className="p-3 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={18}/></button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -662,10 +756,10 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
               <div key={m.phone} className="p-6 bg-white border border-gray-100 rounded-[2.5rem] shadow-sm space-y-5">
                 <div className="flex justify-between items-start text-left">
                   <div className="flex items-center gap-3 text-left">
-                    <div className="w-11 h-11 bg-green-50 rounded-2xl flex items-center justify-center text-green-600 font-black text-lg border border-green-100">{m.name ? m.name[0] : '?'}</div>
+                    <div className="w-11 h-11 bg-green-50 rounded-2xl flex items-center justify-center text-green-600 font-black text-lg border border-green-100">{m.name ? String(m.name)[0] : '?'}</div>
                     <div className="text-left">
-                      <div className="font-black text-gray-900">{m.name}</div>
-                      <div className="text-[10px] font-mono text-gray-300 font-bold">{m.phone}</div>
+                      <div className="font-black text-gray-900">{typeof m.name === 'object' ? JSON.stringify(m.name) : String(m.name || '')}</div>
+                      <div className="text-[10px] font-mono text-gray-300 font-bold">{String(m.phone || '')}</div>
                     </div>
                   </div>
                   <button onClick={() => setDelC({type:'member', id: m.phone})} className="p-2 text-gray-200 hover:text-red-300 transition-colors text-right"><Trash2 size={18}/></button>
@@ -673,15 +767,15 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
                 <div className="grid grid-cols-2 gap-4 font-black">
                   <div className="space-y-3 bg-gray-50/50 p-4 rounded-3xl border border-gray-100/50 text-center">
                     <div className="text-[9px] font-black text-gray-400 uppercase tracking-widest">儲值金</div>
-                    <div className="text-xl text-green-700">${m.balance?.toLocaleString() || 0}</div>
+                    <div className="text-xl text-green-700">${Number(m.balance || 0).toLocaleString()}</div>
                     <div className="grid grid-cols-2 gap-1">
-                      <button onClick={() => handleUpdate(m.phone,'balance',-100)} className="py-2 bg-white border border-red-50 text-red-400 rounded-xl font-black text-[10px]">-100</button>
-                      <button onClick={() => handleUpdate(m.phone,'balance',100)} className="py-2 bg-white border border-green-50 text-green-600 rounded-xl font-black text-[10px]">+100</button>
+                      <button onClick={() => handleUpdate(m.phone,'balance',-100)} className="py-2 bg-white border border-red-50 text-red-400 rounded-xl font-black text-[10px] active:scale-90">-100</button>
+                      <button onClick={() => handleUpdate(m.phone,'balance',100)} className="py-2 bg-white border border-green-50 text-green-600 rounded-xl font-black text-[10px] active:scale-90">+100</button>
                     </div>
                   </div>
                   <div className="space-y-3 bg-gray-50/50 p-4 rounded-3xl border border-gray-100/50 text-center">
                     <div className="text-[9px] font-black text-gray-400 uppercase tracking-widest">包堂數</div>
-                    <div className="text-xl text-orange-600">{m.sessions || 0}堂</div>
+                    <div className="text-xl text-orange-600">{Number(m.sessions || 0)}堂</div>
                     <div className="grid grid-cols-2 gap-1">
                       <button onClick={() => handleUpdate(m.phone,'sessions',-1)} className="py-2 bg-white border border-gray-100 rounded-xl flex justify-center items-center text-gray-400 active:scale-90"><Minus size={14}/></button>
                       <button onClick={() => handleUpdate(m.phone,'sessions',1)} className="py-2 bg-white border border-green-50 rounded-xl flex justify-center items-center text-green-600 active:scale-90"><Plus size={14}/></button>
@@ -692,7 +786,7 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
             ))}
           </div>
           <div className="bg-green-50/50 p-8 rounded-[2.5rem] border border-green-100/50 space-y-6 text-left">
-            <h4 className="font-black text-green-900 flex items-center gap-2"><Plus size={20}/> 新增會員帳號</h4>
+            <h4 className="font-black text-green-900 flex items-center gap-2"><Plus size={20}/> 建立新會員</h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-left">
               <AdminInput label="姓名" value={newM.name} onChange={v => setNewM({...newM, name: v})} placeholder="姓名" />
               <AdminInput label="手機" value={newM.phone} onChange={v => setNewM({...newM, phone: v})} placeholder="09..." />
@@ -702,6 +796,19 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
             <button onClick={async () => {
                 if(!newM.name || !newM.phone) return showToast('請填寫完整姓名與手機','error');
                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'members', newM.phone), {...newM, balance: Number(newM.balance), sessions: Number(newM.sessions)});
+                
+                // --- 新增：同步新建立的會員資料至 Google Script ---
+                if (settings.googleScriptUrl) {
+                  const fd = new FormData();
+                  fd.append('type', 'new_member'); // 標記這是一筆新會員資料
+                  fd.append('name', newM.name);
+                  fd.append('phone', newM.phone);
+                  fd.append('balance', newM.balance);
+                  fd.append('sessions', newM.sessions);
+                  fetch(settings.googleScriptUrl, { method: 'POST', body: fd, mode: 'no-cors' }).catch(console.error);
+                }
+                // --------------------------------------------------
+
                 setNewM({phone:'', name:'', balance:0, sessions:0}); showToast('建立成功');
               }} className="w-full bg-green-700 text-white font-black py-4 rounded-2xl active:scale-95 shadow-lg shadow-green-100 text-center">確認建立會員</button>
           </div>
@@ -710,40 +817,41 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
 
       {adminTab === 'settings' && (
         <div className="space-y-6 animate-in fade-in text-left">
-          <div className="bg-gray-900 p-8 rounded-[2.5rem] shadow-2xl text-white space-y-6 relative overflow-hidden border border-white/5 text-left">
-            <h3 className="font-black text-xl flex items-center gap-2"><LinkIcon size={20} className="text-green-400"/> Google 同步設定</h3>
-            <div className="flex flex-col sm:flex-row gap-2 text-left">
+          <div className="bg-gray-900 p-8 rounded-[2.5rem] shadow-2xl text-white space-y-6 relative overflow-hidden border border-white/5">
+            <h3 className="font-black text-xl flex items-center gap-2"><LinkIcon size={20} className="text-green-400"/> Google 表格同步</h3>
+            <div className="flex flex-col sm:flex-row gap-2">
               <input type="text" value={localS.googleScriptUrl || ''} onChange={e => setLocalS({...localS, googleScriptUrl: e.target.value})} placeholder="https://script.google.com/..." className="flex-1 px-5 py-4 bg-white/5 border border-white/10 rounded-2xl outline-none font-mono text-[10px] text-green-400" />
-              <button onClick={async () => { setIsS(true); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), localS); showToast('設定已儲存'); setIsS(false); }} disabled={isS} className="bg-green-500 text-white font-black py-4 px-8 rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2 text-center">{isS ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} <span>儲存</span></button>
+              <button onClick={async () => { setIsS(true); try { 
+                const globalSettingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global');
+                await setDoc(globalSettingsRef, localS); showToast('Google 同步設定已存檔'); } catch(e){showToast(e, 'error');} setIsS(false); }} disabled={isS} className="bg-green-500 text-white font-black py-4 px-8 rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2">{isS ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} <span>儲存</span></button>
             </div>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 text-left font-black">
-            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-8 text-left">
-              <h3 className="font-black text-gray-900 flex items-center gap-3 text-lg"><Clock size={22} className="text-green-600"/> 營業時段設定</h3>
-              <div className="space-y-8 text-left">
-                <TimeGroup label="平日時段 (週一至週五)" start={localS.weekdayStart} end={localS.weekdayEnd} onStart={v => setLocalS({...localS, weekdayStart:v})} onEnd={v => setLocalS({...localS, weekdayEnd:v})} breakStart={localS.weekdayBreakStart} breakEnd={localS.weekdayBreakEnd} onBreakStart={v => setLocalS({...localS, weekdayBreakStart:v})} onBreakEnd={v => setLocalS({...localS, weekdayBreakEnd:v})} onClear={() => setLocalS({...localS, weekdayBreakStart:'', weekdayBreakEnd:''})} />
-                <TimeGroup label="假日時段 (週六、週日)" start={localS.weekendStart} end={localS.weekendEnd} onStart={v => setLocalS({...localS, weekendStart:v})} onEnd={v => setLocalS({...localS, weekendEnd:v})} breakStart={localS.weekendBreakStart} breakEnd={localS.weekendBreakEnd} onBreakStart={v => setLocalS({...localS, weekendBreakStart:v})} onBreakEnd={v => setLocalS({...localS, weekendBreakEnd:v})} onClear={() => setLocalS({...localS, weekendBreakStart:'', weekendBreakEnd:''})} />
-              </div>
-              <button onClick={async () => { setIsS(true); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), localS); showToast('設定已更新'); setIsS(false); }} disabled={isS} className="w-full bg-gray-900 text-white font-black py-5 rounded-2xl active:scale-95 text-center">儲存營運設定</button>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 font-black">
+            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-8">
+              <h3 className="font-black text-gray-900 flex items-center gap-3 text-lg"><Clock size={22} className="text-green-600"/> 營業時間設定</h3>
+              <TimeGroup label="平日營業時間" start={localS.weekdayStart} end={localS.weekdayEnd} onStart={v => setLocalS({...localS, weekdayStart:v})} onEnd={v => setLocalS({...localS, weekdayEnd:v})} breakStart={localS.weekdayBreakStart} breakEnd={localS.weekdayBreakEnd} onBreakStart={v => setLocalS({...localS, weekdayBreakStart:v})} onBreakEnd={v => setLocalS({...localS, weekdayBreakEnd:v})} onClear={() => setLocalS({...localS, weekdayBreakStart:'', weekdayBreakEnd:''})} />
+              <TimeGroup label="假日營業時間" start={localS.weekendStart} end={localS.weekendEnd} onStart={v => setLocalS({...localS, weekendStart:v})} onEnd={v => setLocalS({...localS, weekendEnd:v})} breakStart={localS.weekendBreakStart} breakEnd={localS.weekendBreakEnd} onBreakStart={v => setLocalS({...localS, weekendBreakStart:v})} onBreakEnd={v => setLocalS({...localS, weekendBreakEnd:v})} onClear={() => setLocalS({...localS, weekendBreakStart:'', weekendBreakEnd:''})} />
+              <button onClick={async () => { setIsS(true); try{ 
+                const globalSettingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global');
+                await setDoc(globalSettingsRef, localS); showToast('營業時段設定已更新'); }catch(e){showToast(e, 'error');} setIsS(false); }} disabled={isS} className="w-full bg-gray-900 text-white font-black py-5 rounded-2xl active:scale-95 text-center transition-all">確認儲存營業時段</button>
             </div>
-            <div className="bg-orange-50/50 p-8 rounded-[2.5rem] border border-orange-100 shadow-sm space-y-6 text-left">
-              <h3 className="font-black text-orange-900 flex items-center gap-3 text-lg justify-center"><CalendarX size={22}/> 特定日期關閉</h3>
-              <div className="space-y-4 text-left">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <AdminInput label="日期" type="date" value={newC.date} onChange={v => setNewC({...newC, date: v})} light />
-                  <AdminInput label="開始" type="time" value={newC.start} onChange={v => setNewC({...newC, start: v})} light />
-                  <AdminInput label="結束" type="time" value={newC.end} onChange={v => setNewC({...newC, end: v})} light />
-                </div>
-                <button onClick={async () => {
-                  if(!newC.date || !newC.start || !newC.end) return showToast('請填寫完整','error');
-                  await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'special_closures')), newC);
-                  setNewC({date:'', start:'', end:''}); showToast('時段已暫停');
-                }} className="w-full bg-orange-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-md text-center">新增暫停時段</button>
+            <div className="bg-orange-50/50 p-8 rounded-[2.5rem] border border-orange-100 shadow-sm space-y-6">
+              <h3 className="font-black text-orange-900 flex items-center gap-3 text-lg justify-center"><CalendarX size={22}/> 手動關閉時段</h3>
+              <div className="grid grid-cols-3 gap-2">
+                <AdminInput label="日期" type="date" value={newC.date} onChange={v => setNewC({...newC, date: v})} light />
+                <AdminInput label="開始" type="time" value={newC.start} onChange={v => setNewC({...newC, start: v})} light />
+                <AdminInput label="結束" type="time" value={newC.end} onChange={v => setNewC({...newC, end: v})} light />
               </div>
+              <button onClick={async () => {
+                if(!newC.date || !newC.start || !newC.end) return showToast('請完整填寫關閉區間','error');
+                try { 
+                  const closuresRef = collection(db, 'artifacts', appId, 'public', 'data', 'special_closures');
+                  await addDoc(closuresRef, newC); setNewC({date:'', start:'', end:''}); showToast('該時段預約已關閉'); }catch(e){showToast(e, 'error');}
+              }} className="w-full bg-orange-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-md text-center transition-all">新增關閉時段</button>
               <div className="max-h-60 overflow-y-auto space-y-2">
                 {specialClosures.map(c => (
-                  <div key={c.id} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-orange-100 font-bold text-xs text-left">
-                    <span>{c.date} <span className="opacity-20 mx-1">|</span> {c.start}-{c.end}</span>
+                  <div key={c.id} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-orange-100 font-bold text-xs shadow-sm">
+                    <span>{String(c.date || '')} <span className="opacity-20 mx-1">|</span> {String(c.start || '')} - {String(c.end || '')}</span>
                     <button onClick={() => handleDeleteItem('closure', c.id)} className="text-orange-200 hover:text-red-500 transition-colors px-2 text-right"><Trash2 size={16}/></button>
                   </div>
                 ))}
@@ -755,22 +863,19 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
 
       {adminTab === 'report' && (
         <div className="space-y-6 animate-in fade-in text-left">
-          <div className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm flex items-center justify-between text-left">
-            <button onClick={() => setReportDate(new Date(reportYear, reportMonth - 1, 1))} className="p-3 bg-gray-50 rounded-2xl hover:bg-gray-100 transition-all text-gray-400"><ChevronLeft size={24}/></button>
-            <div className="text-center font-black"><h3 className="text-2xl text-gray-900">{reportYear}年 {reportMonth + 1}月</h3><p className="text-[10px] text-green-600 uppercase tracking-widest mt-1 italic">Monthly Performance</p></div>
-            <button onClick={() => setReportDate(new Date(reportYear, reportMonth + 1, 1))} className="p-3 bg-gray-50 rounded-2xl hover:bg-gray-100 transition-all text-gray-400"><ChevronRight size={24}/></button>
+          <div className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm flex items-center justify-between">
+            <button onClick={() => setReportDate(new Date(reportYear, reportMonth - 1, 1))} className="p-3 bg-gray-50 rounded-2xl text-gray-400 hover:bg-gray-100 transition-all"><ChevronLeft size={24}/></button>
+            <div className="text-center font-black"><h3 className="text-2xl text-gray-900">{reportYear}年 {reportMonth + 1}月</h3><p className="text-[10px] text-green-600 uppercase tracking-widest mt-1 italic">月度營收分析</p></div>
+            <button onClick={() => setReportDate(new Date(reportYear, reportMonth + 1, 1))} className="p-3 bg-gray-50 rounded-2xl text-gray-400 hover:bg-gray-100 transition-all"><ChevronRight size={24}/></button>
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-center font-black">
-            <div className="bg-green-700 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden text-center">
-              <div className="absolute top-0 right-0 p-10 opacity-10"><Calendar size={100}/></div>
-              <p className="text-xs font-bold opacity-60 uppercase mb-1 tracking-wider text-left">本月預約堂數</p>
-              <p className="text-5xl tracking-tighter text-left mt-2">{filteredBookings.length}<span className="text-lg ml-2 opacity-60 font-medium">堂</span></p>
+          <div className="grid grid-cols-2 gap-4 font-black">
+            <div className="bg-green-700 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden">
+              <p className="text-xs opacity-60 mb-1">當月預約總量</p>
+              <p className="text-5xl">{filteredBookings.length}<span className="text-lg ml-2 opacity-60">堂</span></p>
             </div>
-            <div className="bg-gray-900 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden text-center">
-              <div className="absolute top-0 right-0 p-10 opacity-10"><Wallet size={100}/></div>
-              <p className="text-xs font-bold opacity-60 uppercase mb-1 tracking-wider text-left">本月預計營收</p>
-              <p className="text-5xl tracking-tighter text-left mt-2"><span className="text-2xl mr-1 font-medium opacity-60">$</span>{totalRevenue.toLocaleString()}</p>
+            <div className="bg-gray-900 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden">
+              <p className="text-xs opacity-60 mb-1">預計月營收</p>
+              <p className="text-5xl"><span className="text-2xl mr-1 opacity-60">$</span>{totalRev.toLocaleString()}</p>
             </div>
           </div>
           
@@ -778,13 +883,13 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
              <h4 className="font-black text-gray-900 border-b border-gray-50 pb-4 text-left">本月明細單</h4>
              {filteredBookings.length === 0 ? <p className="py-10 text-center text-gray-300 font-bold italic">當月暫無預約紀錄</p> : (
                <div className="space-y-3">
-                 {filteredBookings.sort((a,b) => a.date.localeCompare(b.date)).map(b => (
+                 {filteredBookings.sort((a,b) => String(a.date || '').localeCompare(String(b.date || ''))).map(b => (
                    <div key={b.id} className="p-4 bg-gray-50/50 rounded-2xl border border-gray-100 flex justify-between items-center text-sm font-bold">
                      <div className="text-left">
-                       <span className="text-green-600 mr-2">{b.date.split('-')[2]}日</span>
-                       <span className="text-gray-900">{b.name}</span>
+                       <span className="text-green-600 mr-2">{String(b.date || '').split('-')[2]}日</span>
+                       <span className="text-gray-900">{typeof b.name === 'object' ? JSON.stringify(b.name) : String(b.name || '')}</span>
                      </div>
-                     <span className="text-gray-400 text-right">{b.service}</span>
+                     <span className="text-gray-400 text-right">{typeof b.service === 'object' ? b.service.title : String(b.service || '')}</span>
                    </div>
                  ))}
                </div>
@@ -799,7 +904,7 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
 function AdminInput({ label, value, onChange, placeholder, type = 'text', light = false }) {
   return (
     <div className="space-y-1 flex-1 min-w-0 text-left">
-      <div className={`text-[9px] font-black uppercase tracking-widest px-2 ${light ? 'text-orange-600/50' : 'text-gray-300'}`}>{label}</div>
+      <div className={`text-[9px] font-black uppercase tracking-widest px-2 ${light ? 'text-orange-600/50' : 'text-gray-300'}`}>{String(label)}</div>
       <input type={type} placeholder={placeholder} value={value} onChange={e => onChange(e.target.value)} className={`w-full px-4 py-4 rounded-2xl outline-none focus:ring-2 font-black transition-all ${light ? 'bg-white focus:ring-orange-400' : 'bg-white focus:ring-green-500 shadow-sm border border-gray-50'}`} />
     </div>
   );
@@ -808,7 +913,7 @@ function AdminInput({ label, value, onChange, placeholder, type = 'text', light 
 function AdminTab({ active, onClick, icon, label }) {
   return (
     <button onClick={onClick} className={`flex-1 flex items-center justify-center gap-2 py-3 px-2 rounded-xl transition-all whitespace-nowrap text-center ${active ? 'bg-green-600 text-white shadow-lg scale-[1.02] font-black' : 'text-gray-400 font-bold hover:bg-gray-50'}`}>
-      {icon} <span className="text-xs md:text-sm">{label}</span>
+      {icon} <span className="text-xs md:text-sm">{String(label)}</span>
     </button>
   );
 }
@@ -816,14 +921,14 @@ function AdminTab({ active, onClick, icon, label }) {
 function TimeGroup({ label, start, end, onStart, onEnd, breakStart, breakEnd, onBreakStart, onBreakEnd, onClear }) {
   return (
     <div className="space-y-4 text-left">
-      <div className="text-[10px] font-black text-gray-400 border-l-4 border-green-500 pl-2 uppercase tracking-widest">{label}</div>
+      <div className="text-[10px] font-black text-gray-400 border-l-4 border-green-500 pl-2 uppercase tracking-widest">{String(label)}</div>
       <div className="flex items-center gap-2 bg-gray-50 p-2 rounded-2xl border border-gray-100">
         <input type="time" value={start} onChange={e => onStart(e.target.value)} className="flex-1 bg-white p-3 rounded-xl font-black text-sm outline-none" />
         <span className="opacity-20 font-black">➜</span>
         <input type="time" value={end} onChange={e => onEnd(e.target.value)} className="flex-1 bg-white p-3 rounded-xl font-black text-sm outline-none" />
       </div>
-      <div className="bg-red-50/50 p-5 rounded-[2rem] border border-red-50 space-y-3">
-        <div className="flex justify-between items-center"><div className="text-[9px] font-black text-red-400 uppercase tracking-widest italic font-bold">固定休息</div> <button onClick={onClear} className="text-[8px] font-black text-red-300 border border-red-100 bg-white px-3 py-1 rounded-full uppercase font-bold text-center">清除</button></div>
+      <div className="bg-red-50/50 p-5 rounded-[2rem] border border-red-50 space-y-3 text-left">
+        <div className="flex justify-between items-center"><div className="text-[9px] font-black text-red-400 uppercase tracking-widest italic font-bold">固定休息</div> <button onClick={onClear} className="text-[8px] font-black text-red-300 border border-red-100 bg-white px-3 py-1 rounded-full uppercase font-bold text-center transition-all">清除</button></div>
         <div className="flex items-center gap-2">
           <input type="time" value={breakStart || ''} onChange={e => onBreakStart(e.target.value)} className="flex-1 bg-white p-3 rounded-xl text-xs font-black outline-none" />
           <span className="opacity-10">➜</span>
