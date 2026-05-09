@@ -48,6 +48,13 @@ const getTWTodayStr = () => {
   return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
 };
 
+// 獲取台灣明日日期字串 YYYY-MM-DD (新增此變數來限制當天不可預約)
+const getTWTomorrowStr = () => {
+  const now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+  now.setDate(now.getDate() + 1);
+  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+};
+
 // ==========================================
 // 共用元件
 // ==========================================
@@ -254,6 +261,7 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const todayStr = getTWTodayStr();
+  const tomorrowStr = getTWTomorrowStr(); // 宣告明日字串
   const getTWNow = () => new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
 
   const getAvailableSlots = (dateString, durationMins) => {
@@ -377,7 +385,7 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
               </div>
               <div className="space-y-1 text-left">
                 <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">1. 請先點選日期</div>
-                <input type="date" min={todayStr} value={bookingData.date} onChange={(e) => setBookingData({...bookingData, date: e.target.value, time: ''})} className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-black" />
+                <input type="date" min={tomorrowStr} value={bookingData.date} onChange={(e) => setBookingData({...bookingData, date: e.target.value, time: ''})} className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-black" />
               </div>
             </div>
             {bookingData.date && (
@@ -868,14 +876,16 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
             <div className="text-center font-black"><h3 className="text-2xl text-gray-900">{reportYear}年 {reportMonth + 1}月</h3><p className="text-[10px] text-green-600 uppercase tracking-widest mt-1 italic">月度營收分析</p></div>
             <button onClick={() => setReportDate(new Date(reportYear, reportMonth + 1, 1))} className="p-3 bg-gray-50 rounded-2xl text-gray-400 hover:bg-gray-100 transition-all"><ChevronRight size={24}/></button>
           </div>
-          <div className="grid grid-cols-2 gap-4 font-black">
-            <div className="bg-green-700 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden">
-              <p className="text-xs opacity-60 mb-1">當月預約總量</p>
-              <p className="text-5xl">{filteredBookings.length}<span className="text-lg ml-2 opacity-60">堂</span></p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-black">
+            <div className="bg-green-700 p-6 md:p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden">
+              <div className="absolute top-1/2 -translate-y-1/2 right-0 pr-6 opacity-10"><Calendar size={80} className="md:w-[100px] md:h-[100px]"/></div>
+              <p className="text-xs opacity-60 mb-1 relative z-10">當月預約總量</p>
+              <p className="text-4xl md:text-5xl relative z-10">{filteredBookings.length}<span className="text-sm md:text-lg ml-2 opacity-60">堂</span></p>
             </div>
-            <div className="bg-gray-900 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden">
-              <p className="text-xs opacity-60 mb-1">預計月營收</p>
-              <p className="text-5xl"><span className="text-2xl mr-1 opacity-60">$</span>{totalRev.toLocaleString()}</p>
+            <div className="bg-gray-900 p-6 md:p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden">
+              <div className="absolute top-1/2 -translate-y-1/2 right-0 pr-6 opacity-10"><Wallet size={80} className="md:w-[100px] md:h-[100px]"/></div>
+              <p className="text-xs opacity-60 mb-1 relative z-10">預計月營收</p>
+              <p className="text-4xl md:text-5xl relative z-10"><span className="text-xl md:text-2xl mr-1 opacity-60">$</span>{totalRev.toLocaleString()}</p>
             </div>
           </div>
           
