@@ -613,6 +613,20 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
     try {
       const memberRef = doc(db, 'artifacts', appId, 'public', 'data', 'members', phone);
       await setDoc(memberRef, { ...m, [f]: nV }, { merge: true });
+
+      // 同步儲值金與包堂數的異動至 Google Script
+      if (settings.googleScriptUrl) {
+        const fd = new FormData();
+        fd.append('type', 'member_update');
+        fd.append('name', m.name);
+        fd.append('phone', phone);
+        fd.append('field', f === 'balance' ? '儲值金' : '包堂數');
+        fd.append('change', amt);
+        fd.append('balance', f === 'balance' ? nV : (m.balance || 0));
+        fd.append('sessions', f === 'sessions' ? nV : (m.sessions || 0));
+        fetch(settings.googleScriptUrl, { method: 'POST', body: fd, mode: 'no-cors' }).catch(console.error);
+      }
+
       showToast('會員資料已更新');
     } catch (e) { showToast(e, 'error'); }
   };
@@ -807,7 +821,20 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
             </div>
             <button onClick={async () => {
                 if(!newM.name || !newM.phone) return showToast('請填寫完整姓名與手機','error');
-                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'members', newM.phone), {...newM, balance: Number(newM.balance), sessions: Number(newM.sessions)});
+                const memberRef = doc(db, 'artifacts', appId, 'public', 'data', 'members', newM.phone);
+                await setDoc(memberRef, {...newM, balance: Number(newM.balance), sessions: Number(newM.sessions)});
+                
+                // 同步新建立的會員資料至 Google Script
+                if (settings.googleScriptUrl) {
+                  const fd = new FormData();
+                  fd.append('type', 'new_member');
+                  fd.append('name', newM.name);
+                  fd.append('phone', newM.phone);
+                  fd.append('balance', newM.balance);
+                  fd.append('sessions', newM.sessions);
+                  fetch(settings.googleScriptUrl, { method: 'POST', body: fd, mode: 'no-cors' }).catch(console.error);
+                }
+                
                 setNewM({phone:'', name:'', balance:0, sessions:0}); showToast('建立成功');
               }} className="w-full bg-green-700 text-white font-black py-4 rounded-2xl active:scale-95 shadow-lg shadow-green-100 text-center">確認建立會員</button>
           </div>
@@ -842,7 +869,7 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
                 </div>
                 <button onClick={async () => {
                   if(!newC.date || !newC.start || !newC.end) return showToast('請填寫完整','error');
-                  await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'special_closures')), newC);
+                  await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'special_closures'), newC);
                   setNewC({date:'', start:'', end:''}); showToast('時段已暫停');
                 }} className="w-full bg-orange-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-md text-center">新增暫停時段</button>
               </div>
