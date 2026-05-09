@@ -42,17 +42,23 @@ const INITIAL_SETTINGS = {
   googleScriptUrl: '' 
 };
 
-// 獲取台灣今日日期字串 YYYY-MM-DD
-const getTWTodayStr = () => {
-  const now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
-  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+// ==========================================
+// 核心修正：跨平台台灣時間轉換引擎 (解決 Safari / iOS Invalid Date 問題)
+// ==========================================
+const getTWNow = () => {
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  return new Date(utc + (3600000 * 8)); // UTC+8
 };
 
-// 獲取台灣明日日期字串 YYYY-MM-DD (新增此變數來限制當天不可預約)
-const getTWTomorrowStr = () => {
-  const now = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
-  now.setDate(now.getDate() + 1);
-  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+const getTWDateStr = (offsetDays = 0) => {
+  const twTime = getTWNow();
+  if (offsetDays !== 0) {
+    twTime.setDate(twTime.getDate() + offsetDays);
+  }
+  return twTime.getFullYear() + '-' + 
+         String(twTime.getMonth() + 1).padStart(2, '0') + '-' + 
+         String(twTime.getDate()).padStart(2, '0');
 };
 
 // ==========================================
@@ -260,14 +266,13 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
   const [bookingData, setBookingData] = useState({ service: null, date: '', time: '', name: '', phone: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const todayStr = getTWTodayStr();
-  const tomorrowStr = getTWTomorrowStr(); // 宣告明日字串
-  const getTWNow = () => new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Taipei"}));
+  // 取得明日日期，作為不可預約今日的依據
+  const tomorrowStr = getTWDateStr(1);
 
   const getAvailableSlots = (dateString, durationMins) => {
-    if (!dateString) return [];
-    const nowTW = getTWNow();
-    const currentMins = nowTW.getHours() * 60 + nowTW.getMinutes();
+    // 嚴格阻擋：只要是今天以前的日期，直接回傳無時段可選
+    if (!dateString || dateString < tomorrowStr) return [];
+    
     const date = new Date(dateString);
     const day = date.getDay(); 
     const isWeekend = day === 0 || day === 6;
@@ -284,7 +289,6 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
     const slots = [];
 
     for (let t = startMins; (t + durationMins) <= endMins; t += 30) {
-      if (dateString === todayStr && t < (currentMins + 60)) continue;
       const slotStart = t;
       const slotEnd = t + durationMins;
       let isOverlapping = false;
@@ -385,7 +389,22 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
               </div>
               <div className="space-y-1 text-left">
                 <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">1. 請先點選日期</div>
-                <input type="date" min={tomorrowStr} value={bookingData.date} onChange={(e) => setBookingData({...bookingData, date: e.target.value, time: ''})} className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-black" />
+                <input 
+                  type="date" 
+                  min={tomorrowStr} 
+                  value={bookingData.date} 
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    // 雙重保險：如果客人透過手機特殊輸入法選了今天或過去的日期，給予提示並擋下
+                    if (val && val < tomorrowStr) {
+                      showToast('為提供最佳服務，僅開放預約明日起之時段喔！', 'error');
+                      setBookingData({...bookingData, date: '', time: ''});
+                    } else {
+                      setBookingData({...bookingData, date: val, time: ''});
+                    }
+                  }} 
+                  className="w-full px-5 py-4 bg-gray-50 border-none rounded-2xl outline-none focus:ring-2 focus:ring-green-500 font-black" 
+                />
               </div>
             </div>
             {bookingData.date && (
@@ -558,7 +577,7 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
   const [newC, setNewC] = useState({ date: '', start: '', end: '' });
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [reportDate, setReportDate] = useState(new Date());
-  const [selectedDate, setSelectedDate] = useState(getTWTodayStr());
+  const [selectedDate, setSelectedDate] = useState(getTWDateStr(0));
   const [editingBooking, setEditingBooking] = useState(null);
 
   useEffect(() => { setLocalS(settings); }, [settings]);
@@ -590,27 +609,12 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
 
   const handleUpdate = async (phone, f, amt) => {
     const m = members[phone];
-    const nV = Math.max(0, (m[f] || 0) + amt); 
-    const upd = { ...m, [f]: nV };
+    const nV = Math.max(0, Number(m[f] || 0) + amt); 
     try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'members', phone), upd, { merge: true });
-      
-      // --- 新增：同步儲值金與包堂數的異動至 Google Script ---
-      if (settings.googleScriptUrl) {
-        const fd = new FormData();
-        fd.append('type', 'member_update'); // 標記這是一筆會員更新
-        fd.append('name', m.name);
-        fd.append('phone', phone);
-        fd.append('field', f === 'balance' ? '儲值金' : '包堂數'); // 告知異動的欄位
-        fd.append('change', amt); // 異動數值 (如: 100, -1)
-        fd.append('balance', f === 'balance' ? nV : (m.balance || 0)); // 更新後的儲值金餘額
-        fd.append('sessions', f === 'sessions' ? nV : (m.sessions || 0)); // 更新後的包堂餘額
-        fetch(settings.googleScriptUrl, { method: 'POST', body: fd, mode: 'no-cors' }).catch(console.error);
-      }
-      // --------------------------------------------------
-
-      showToast('資料已成功更新');
-    } catch (e) { showToast('更新失敗', 'error'); }
+      const memberRef = doc(db, 'artifacts', appId, 'public', 'data', 'members', phone);
+      await setDoc(memberRef, { ...m, [f]: nV }, { merge: true });
+      showToast('會員資料已更新');
+    } catch (e) { showToast(e, 'error'); }
   };
 
   const handleDeleteItem = async (type, id) => {
@@ -723,7 +727,7 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
               {generateCalendar().map((date, idx) => {
                 const dayBookings = bookings.filter(b => b.date === date);
                 const isSelected = selectedDate === date;
-                const isToday = date === getTWTodayStr();
+                const isToday = date === getTWDateStr(0);
                 return (
                   <div key={idx} onClick={() => date && setSelectedDate(date)} className={`relative aspect-square flex flex-col items-center justify-center rounded-2xl cursor-pointer transition-all border-2 ${!date ? 'opacity-0' : ''} ${isSelected ? 'bg-green-600 border-green-600 text-white shadow-lg' : 'bg-gray-50/50 border-transparent hover:border-gray-100'} ${isToday && !isSelected ? 'text-green-600 border-green-100' : ''}`}>
                     <span className="text-xs font-black">{date ? date.split('-')[2] : ''}</span>
@@ -804,19 +808,6 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
             <button onClick={async () => {
                 if(!newM.name || !newM.phone) return showToast('請填寫完整姓名與手機','error');
                 await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'members', newM.phone), {...newM, balance: Number(newM.balance), sessions: Number(newM.sessions)});
-                
-                // --- 新增：同步新建立的會員資料至 Google Script ---
-                if (settings.googleScriptUrl) {
-                  const fd = new FormData();
-                  fd.append('type', 'new_member'); // 標記這是一筆新會員資料
-                  fd.append('name', newM.name);
-                  fd.append('phone', newM.phone);
-                  fd.append('balance', newM.balance);
-                  fd.append('sessions', newM.sessions);
-                  fetch(settings.googleScriptUrl, { method: 'POST', body: fd, mode: 'no-cors' }).catch(console.error);
-                }
-                // --------------------------------------------------
-
                 setNewM({phone:'', name:'', balance:0, sessions:0}); showToast('建立成功');
               }} className="w-full bg-green-700 text-white font-black py-4 rounded-2xl active:scale-95 shadow-lg shadow-green-100 text-center">確認建立會員</button>
           </div>
@@ -825,41 +816,40 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
 
       {adminTab === 'settings' && (
         <div className="space-y-6 animate-in fade-in text-left">
-          <div className="bg-gray-900 p-8 rounded-[2.5rem] shadow-2xl text-white space-y-6 relative overflow-hidden border border-white/5">
-            <h3 className="font-black text-xl flex items-center gap-2"><LinkIcon size={20} className="text-green-400"/> Google 表格同步</h3>
-            <div className="flex flex-col sm:flex-row gap-2">
+          <div className="bg-gray-900 p-8 rounded-[2.5rem] shadow-2xl text-white space-y-6 relative overflow-hidden border border-white/5 text-left">
+            <h3 className="font-black text-xl flex items-center gap-2"><LinkIcon size={20} className="text-green-400"/> Google 同步設定</h3>
+            <div className="flex flex-col sm:flex-row gap-2 text-left">
               <input type="text" value={localS.googleScriptUrl || ''} onChange={e => setLocalS({...localS, googleScriptUrl: e.target.value})} placeholder="https://script.google.com/..." className="flex-1 px-5 py-4 bg-white/5 border border-white/10 rounded-2xl outline-none font-mono text-[10px] text-green-400" />
-              <button onClick={async () => { setIsS(true); try { 
-                const globalSettingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global');
-                await setDoc(globalSettingsRef, localS); showToast('Google 同步設定已存檔'); } catch(e){showToast(e, 'error');} setIsS(false); }} disabled={isS} className="bg-green-500 text-white font-black py-4 px-8 rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2">{isS ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} <span>儲存</span></button>
+              <button onClick={async () => { setIsS(true); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), localS); showToast('設定已儲存'); setIsS(false); }} disabled={isS} className="bg-green-500 text-white font-black py-4 px-8 rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2 text-center">{isS ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} <span>儲存</span></button>
             </div>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 font-black">
-            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-8">
-              <h3 className="font-black text-gray-900 flex items-center gap-3 text-lg"><Clock size={22} className="text-green-600"/> 營業時間設定</h3>
-              <TimeGroup label="平日營業時間" start={localS.weekdayStart} end={localS.weekdayEnd} onStart={v => setLocalS({...localS, weekdayStart:v})} onEnd={v => setLocalS({...localS, weekdayEnd:v})} breakStart={localS.weekdayBreakStart} breakEnd={localS.weekdayBreakEnd} onBreakStart={v => setLocalS({...localS, weekdayBreakStart:v})} onBreakEnd={v => setLocalS({...localS, weekdayBreakEnd:v})} onClear={() => setLocalS({...localS, weekdayBreakStart:'', weekdayBreakEnd:''})} />
-              <TimeGroup label="假日營業時間" start={localS.weekendStart} end={localS.weekendEnd} onStart={v => setLocalS({...localS, weekendStart:v})} onEnd={v => setLocalS({...localS, weekendEnd:v})} breakStart={localS.weekendBreakStart} breakEnd={localS.weekendBreakEnd} onBreakStart={v => setLocalS({...localS, weekendBreakStart:v})} onBreakEnd={v => setLocalS({...localS, weekendBreakEnd:v})} onClear={() => setLocalS({...localS, weekendBreakStart:'', weekendBreakEnd:''})} />
-              <button onClick={async () => { setIsS(true); try{ 
-                const globalSettingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global');
-                await setDoc(globalSettingsRef, localS); showToast('營業時段設定已更新'); }catch(e){showToast(e, 'error');} setIsS(false); }} disabled={isS} className="w-full bg-gray-900 text-white font-black py-5 rounded-2xl active:scale-95 text-center transition-all">確認儲存營業時段</button>
-            </div>
-            <div className="bg-orange-50/50 p-8 rounded-[2.5rem] border border-orange-100 shadow-sm space-y-6">
-              <h3 className="font-black text-orange-900 flex items-center gap-3 text-lg justify-center"><CalendarX size={22}/> 手動關閉時段</h3>
-              <div className="grid grid-cols-3 gap-2">
-                <AdminInput label="日期" type="date" value={newC.date} onChange={v => setNewC({...newC, date: v})} light />
-                <AdminInput label="開始" type="time" value={newC.start} onChange={v => setNewC({...newC, start: v})} light />
-                <AdminInput label="結束" type="time" value={newC.end} onChange={v => setNewC({...newC, end: v})} light />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 text-left font-black">
+            <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-8 text-left">
+              <h3 className="font-black text-gray-900 flex items-center gap-3 text-lg"><Clock size={22} className="text-green-600"/> 營業時段設定</h3>
+              <div className="space-y-8 text-left">
+                <TimeGroup label="平日時段 (週一至週五)" start={localS.weekdayStart} end={localS.weekdayEnd} onStart={v => setLocalS({...localS, weekdayStart:v})} onEnd={v => setLocalS({...localS, weekdayEnd:v})} breakStart={localS.weekdayBreakStart} breakEnd={localS.weekdayBreakEnd} onBreakStart={v => setLocalS({...localS, weekdayBreakStart:v})} onBreakEnd={v => setLocalS({...localS, weekdayBreakEnd:v})} onClear={() => setLocalS({...localS, weekdayBreakStart:'', weekdayBreakEnd:''})} />
+                <TimeGroup label="假日時段 (週六、週日)" start={localS.weekendStart} end={localS.weekendEnd} onStart={v => setLocalS({...localS, weekendStart:v})} onEnd={v => setLocalS({...localS, weekendEnd:v})} breakStart={localS.weekendBreakStart} breakEnd={localS.weekendBreakEnd} onBreakStart={v => setLocalS({...localS, weekendBreakStart:v})} onBreakEnd={v => setLocalS({...localS, weekendBreakEnd:v})} onClear={() => setLocalS({...localS, weekendBreakStart:'', weekendBreakEnd:''})} />
               </div>
-              <button onClick={async () => {
-                if(!newC.date || !newC.start || !newC.end) return showToast('請完整填寫關閉區間','error');
-                try { 
-                  const closuresRef = collection(db, 'artifacts', appId, 'public', 'data', 'special_closures');
-                  await addDoc(closuresRef, newC); setNewC({date:'', start:'', end:''}); showToast('該時段預約已關閉'); }catch(e){showToast(e, 'error');}
-              }} className="w-full bg-orange-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-md text-center transition-all">新增關閉時段</button>
+              <button onClick={async () => { setIsS(true); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), localS); showToast('設定已更新'); setIsS(false); }} disabled={isS} className="w-full bg-gray-900 text-white font-black py-5 rounded-2xl active:scale-95 text-center">儲存營運設定</button>
+            </div>
+            <div className="bg-orange-50/50 p-8 rounded-[2.5rem] border border-orange-100 shadow-sm space-y-6 text-left">
+              <h3 className="font-black text-orange-900 flex items-center gap-3 text-lg justify-center"><CalendarX size={22}/> 特定日期關閉</h3>
+              <div className="space-y-4 text-left">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <AdminInput label="日期" type="date" value={newC.date} onChange={v => setNewC({...newC, date: v})} light />
+                  <AdminInput label="開始" type="time" value={newC.start} onChange={v => setNewC({...newC, start: v})} light />
+                  <AdminInput label="結束" type="time" value={newC.end} onChange={v => setNewC({...newC, end: v})} light />
+                </div>
+                <button onClick={async () => {
+                  if(!newC.date || !newC.start || !newC.end) return showToast('請填寫完整','error');
+                  await setDoc(doc(collection(db, 'artifacts', appId, 'public', 'data', 'special_closures')), newC);
+                  setNewC({date:'', start:'', end:''}); showToast('時段已暫停');
+                }} className="w-full bg-orange-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-md text-center">新增暫停時段</button>
+              </div>
               <div className="max-h-60 overflow-y-auto space-y-2">
                 {specialClosures.map(c => (
-                  <div key={c.id} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-orange-100 font-bold text-xs shadow-sm">
-                    <span>{String(c.date || '')} <span className="opacity-20 mx-1">|</span> {String(c.start || '')} - {String(c.end || '')}</span>
+                  <div key={c.id} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-orange-100 font-bold text-xs text-left">
+                    <span>{c.date} <span className="opacity-20 mx-1">|</span> {c.start}-{c.end}</span>
                     <button onClick={() => handleDeleteItem('closure', c.id)} className="text-orange-200 hover:text-red-500 transition-colors px-2 text-right"><Trash2 size={16}/></button>
                   </div>
                 ))}
@@ -871,11 +861,12 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
 
       {adminTab === 'report' && (
         <div className="space-y-6 animate-in fade-in text-left">
-          <div className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm flex items-center justify-between">
-            <button onClick={() => setReportDate(new Date(reportYear, reportMonth - 1, 1))} className="p-3 bg-gray-50 rounded-2xl text-gray-400 hover:bg-gray-100 transition-all"><ChevronLeft size={24}/></button>
-            <div className="text-center font-black"><h3 className="text-2xl text-gray-900">{reportYear}年 {reportMonth + 1}月</h3><p className="text-[10px] text-green-600 uppercase tracking-widest mt-1 italic">月度營收分析</p></div>
+          <div className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm flex items-center justify-between text-left">
+            <button onClick={() => setReportDate(new Date(reportYear, reportMonth - 1, 1))} className="p-3 bg-gray-50 rounded-2xl hover:bg-gray-100 transition-all text-gray-400"><ChevronLeft size={24}/></button>
+            <div className="text-center font-black"><h3 className="text-2xl text-gray-900">{reportYear}年 {reportMonth + 1}月</h3><p className="text-[10px] text-green-600 uppercase tracking-widest mt-1 italic">Monthly Performance</p></div>
             <button onClick={() => setReportDate(new Date(reportYear, reportMonth + 1, 1))} className="p-3 bg-gray-50 rounded-2xl text-gray-400 hover:bg-gray-100 transition-all"><ChevronRight size={24}/></button>
           </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-black">
             <div className="bg-green-700 p-6 md:p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden">
               <div className="absolute top-1/2 -translate-y-1/2 right-0 pr-6 opacity-10"><Calendar size={80} className="md:w-[100px] md:h-[100px]"/></div>
