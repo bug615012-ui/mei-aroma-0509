@@ -354,8 +354,8 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
             <div className="space-y-4 text-gray-600 bg-gray-50/50 p-6 md:p-8 rounded-[2rem] border border-gray-100/50 text-left text-sm md:text-base leading-relaxed">
               <p>為保留每位顧客專屬的療癒時光，本工作室採<strong className="text-green-700">預約制服務</strong>。</p>
               <p>請提前私訊確認可預約時段，並建議於療程前 <strong className="text-green-700">5–10 分鐘</strong> 抵達，讓身體與心慢慢安定下來。</p>
-              <p>若需調整或取消預約，請於<strong className="text-green-700">預約前一日</strong>告知。</p>
-              <p>如當日臨時遲到，療程將依原預約時間結束，感謝您的體諒。</p>
+              <p>若需調整或取消預約，請於<strong className="text-green-700">預約前二日</strong>告知，逾期將無法退款。</p>
+              <p>如當日臨時遲到或取消，療程將依原預約時間結束，款項亦無法退款。感謝您的體諒。</p>
             </div>
             <button onClick={() => setStep(1)} className="w-full bg-green-700 hover:bg-green-800 text-white font-black py-5 rounded-2xl active:scale-95 transition-all shadow-lg shadow-green-100 mt-8">開始預約</button>
           </div>
