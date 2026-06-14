@@ -27,7 +27,7 @@ const appId = 'mei-aroma-app';
 const SERVICES = [
   { id: 's1', title: '30分鐘 局部體驗', duration: 30, desc: '適合局部放鬆、快速紓壓、輕盈體驗。', price: 600 },
   { id: 's2', title: '1小時 慢活療癒療程', duration: 60, desc: '適合身心放鬆、舒緩疲憊、日常保養。', price: 1200 },
-  { id: 's3', title: '2小時 深層修護療程', duration: 120, desc: '適合深層放鬆、完整修復、全身療癒感。', price: 2000 },
+  { id: 's3', title: '100分鐘 深層修護療程', duration: 120, desc: '適合深層放鬆、完整修復、全身療癒感。', price: 1500 },
 ];
 
 const INITIAL_SETTINGS = {
