@@ -100,6 +100,7 @@ export default function App() {
   const [settings, setSettings] = useState(INITIAL_SETTINGS);
   const [bookings, setBookings] = useState([]); 
   const [specialClosures, setSpecialClosures] = useState([]);
+  const [specialOpenings, setSpecialOpenings] = useState([]); // ✨ 新增：特定日期開啟狀態
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -171,6 +172,12 @@ export default function App() {
       setSpecialClosures(data);
     }, (err) => console.error("Firestore Closures Error:", err));
 
+    const unsubOpenings = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'special_openings'), (snap) => {
+  const data = [];
+  snap.forEach(d => data.push({ id: d.id, ...d.data() }));
+  setSpecialOpenings(data);
+});
+
     // 安全防護機制：如果 Firebase 連線異常，2.5 秒後強制隱藏 Loading，避免網頁凍結
     const safetyTimeout = setTimeout(() => {
       if (isMounted) setIsLoading(false);
@@ -179,7 +186,7 @@ export default function App() {
     return () => {
       isMounted = false;
       clearTimeout(safetyTimeout);
-      unsubMembers(); unsubSettings(); unsubBookings(); unsubClosures();
+      unsubMembers(); unsubSettings(); unsubBookings(); unsubClosures(); unsubOpenings();
     };
   }, [user]);
 
@@ -228,11 +235,11 @@ export default function App() {
       </nav>
 
       <main className="max-w-5xl mx-auto p-4 md:py-12">
-        {currentView === 'book' && <BookingFlow settings={settings} bookings={bookings} specialClosures={specialClosures} user={user} showToast={showToast} />}
+        {currentView === 'book' && <BookingFlow settings={settings} bookings={bookings} specialClosures={specialClosures} specialOpenings={specialOpenings} user={user} showToast={showToast} />}
         {currentView === 'member' && <MemberPortal members={members} bookings={bookings} />}
         {currentView === 'admin' && (
           <AdminPortal 
-            members={members} settings={settings} bookings={bookings} specialClosures={specialClosures}
+            members={members} settings={settings} bookings={bookings} specialClosures={specialClosures} specialOpenings={specialOpenings}
             isAdminAuthenticated={isAdminAuthenticated} setIsAdminAuthenticated={setIsAdminAuthenticated} user={user} showToast={showToast} 
           />
         )}
@@ -261,7 +268,7 @@ function MobileTab({ active, onClick, icon, label }) {
 // ==========================================
 // 預約流程元件
 // ==========================================
-function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
+function BookingFlow({ settings, bookings, specialClosures, specialOpenings, user, showToast }) {
   const [step, setStep] = useState(0); 
   const [bookingData, setBookingData] = useState({ service: null, date: '', time: '', name: '', phone: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -280,8 +287,19 @@ function BookingFlow({ settings, bookings, specialClosures, user, showToast }) {
       const [h, m] = timeStr.split(':').map(Number);
       return h * 60 + m;
     };
-    const startMins = isWeekend ? parseTime(settings.weekendStart || "10:00") : parseTime(settings.weekdayStart || "17:30"); 
-    const endMins = isWeekend ? parseTime(settings.weekendEnd || "17:00") : parseTime(settings.weekdayEnd || "20:00");
+    // ✨ 核心功能：特定日期開啟優先判定 (覆蓋平日/假日預設時段)
+const openingOnDate = specialOpenings.find(o => o.date === dateString);
+
+let startMins, endMins;
+if (openingOnDate) {
+  // 如果今天有設定特開，就直接用特開的開始與結束時間
+  startMins = parseTime(openingOnDate.start);
+  endMins = parseTime(openingOnDate.end);
+} else {
+  // 否則就照常判斷平日或假日
+  startMins = isWeekend ? parseTime(settings.weekendStart || "10:00") : parseTime(settings.weekdayStart || "17:30"); 
+  endMins = isWeekend ? parseTime(settings.weekendEnd || "17:00") : parseTime(settings.weekdayEnd || "20:00");
+}
     const breakStartMins = (isWeekend ? settings.weekendBreakStart : settings.weekdayBreakStart) ? parseTime(isWeekend ? settings.weekendBreakStart : settings.weekdayBreakStart) : null;
     const breakEndMins = (isWeekend ? settings.weekendBreakEnd : settings.weekdayBreakEnd) ? parseTime(isWeekend ? settings.weekendBreakEnd : settings.weekdayBreakEnd) : null;
     const bookingsOnDate = bookings.filter(b => b.date === dateString);
@@ -575,6 +593,7 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
   const [isS, setIsS] = useState(false);
   const [delC, setDelC] = useState(null); 
   const [newC, setNewC] = useState({ date: '', start: '', end: '' });
+  const [newO, setNewO] = useState({ date: '', start: '', end: '' });
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [reportDate, setReportDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(getTWDateStr(0));
@@ -632,13 +651,16 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
   };
 
   const handleDeleteItem = async (type, id) => {
-    const colName = type === 'member' ? 'members' : type === 'booking' ? 'bookings' : 'special_closures';
-    try {
-      const itemRef = doc(db, 'artifacts', appId, 'public', 'data', colName, id);
-      await deleteDoc(itemRef);
-      showToast('資料已成功移除');
-    } catch (e) { showToast(e, 'error'); }
-  };
+  // 判定是要刪除哪一個資料表
+  const colName = type === 'member' ? 'members' : 
+                  type === 'booking' ? 'bookings' : 
+                  type === 'closure' ? 'special_closures' : 'special_openings'; // ✨ 加上特開資料表
+  try {
+    const itemRef = doc(db, 'artifacts', appId, 'public', 'data', colName, id);
+    await deleteDoc(itemRef);
+    showToast('資料已成功移除');
+  } catch (e) { showToast(e, 'error'); }
+};
 
   const handleEditSubmit = async (e) => {
     e.preventDefault();
@@ -850,7 +872,7 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
               <button onClick={async () => { setIsS(true); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), localS); showToast('設定已儲存'); setIsS(false); }} disabled={isS} className="bg-green-500 text-white font-black py-4 px-8 rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2 text-center">{isS ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} <span>儲存</span></button>
             </div>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 text-left font-black">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left font-black">
             <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-8 text-left">
               <h3 className="font-black text-gray-900 flex items-center gap-3 text-lg"><Clock size={22} className="text-green-600"/> 營業時段設定</h3>
               <div className="space-y-8 text-left">
@@ -859,29 +881,38 @@ function AdminPortal({ members, settings, bookings, specialClosures, isAdminAuth
               </div>
               <button onClick={async () => { setIsS(true); await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'global'), localS); showToast('設定已更新'); setIsS(false); }} disabled={isS} className="w-full bg-gray-900 text-white font-black py-5 rounded-2xl active:scale-95 text-center">儲存營運設定</button>
             </div>
-            <div className="bg-orange-50/50 p-8 rounded-[2.5rem] border border-orange-100 shadow-sm space-y-6 text-left">
-              <h3 className="font-black text-orange-900 flex items-center gap-3 text-lg justify-center"><CalendarX size={22}/> 特定日期關閉</h3>
-              <div className="space-y-4 text-left">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <AdminInput label="日期" type="date" value={newC.date} onChange={v => setNewC({...newC, date: v})} light />
-                  <AdminInput label="開始" type="time" value={newC.start} onChange={v => setNewC({...newC, start: v})} light />
-                  <AdminInput label="結束" type="time" value={newC.end} onChange={v => setNewC({...newC, end: v})} light />
-                </div>
-                <button onClick={async () => {
-                  if(!newC.date || !newC.start || !newC.end) return showToast('請填寫完整','error');
-                  await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'special_closures'), newC);
-                  setNewC({date:'', start:'', end:''}); showToast('時段已暫停');
-                }} className="w-full bg-orange-600 text-white font-black py-4 rounded-2xl active:scale-95 shadow-md text-center">新增暫停時段</button>
-              </div>
-              <div className="max-h-60 overflow-y-auto space-y-2">
-                {specialClosures.map(c => (
-                  <div key={c.id} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-orange-100 font-bold text-xs text-left">
-                    <span>{c.date} <span className="opacity-20 mx-1">|</span> {c.start}-{c.end}</span>
-                    <button onClick={() => handleDeleteItem('closure', c.id)} className="text-orange-200 hover:text-red-500 transition-colors px-2 text-right"><Trash2 size={16}/></button>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <!-- 3. ✨ 特定日期開啟設定面板 -->
+<div className="bg-green-50/50 p-8 rounded-[2.5rem] border border-green-100 shadow-sm space-y-6 text-left">
+  <h3 className="font-black text-green-900 flex items-center gap-3 text-lg justify-center">
+    <Calendar className="text-green-600" size={22}/> 特定日期開啟
+  </h3>
+  <div className="space-y-4 text-left">
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+      <AdminInput label="日期" type="date" value={newO.date} onChange={v => setNewO({...newO, date: v})} light />
+      <AdminInput label="開始" type="time" value={newO.start} onChange={v => setNewO({...newO, start: v})} light />
+      <AdminInput label="結束" type="time" value={newO.end} onChange={v => setNewO({...newO, end: v})} light />
+    </div>
+    <button onClick={async () => {
+      if(!newO.date || !newO.start || !newO.end) return showToast('請填寫完整','error');
+      // 將特開日期寫入資料庫
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'special_openings'), newO);
+      setNewO({date:'', start:'', end:''}); 
+      showToast('時段已特開');
+    }} className="w-full bg-green-700 text-white font-black py-4 rounded-2xl active:scale-95 shadow-md text-center">
+      新增特開時段
+    </button>
+  </div>
+  <div className="max-h-60 overflow-y-auto space-y-2">
+    {specialOpenings.map(o => (
+      <div key={o.id} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-green-100 font-bold text-xs text-left">
+        <span>{o.date} <span className="opacity-20 mx-1">|</span> {o.start}-{o.end}</span>
+        <button onClick={() => handleDeleteItem('opening', o.id)} className="text-green-200 hover:text-red-500 transition-colors px-2 text-right">
+          <Trash2 size={16}/>
+        </button>
+      </div>
+    ))}
+  </div>
+</div>
           </div>
         </div>
       )}
