@@ -300,7 +300,7 @@ function BookingFlow({ settings, bookings, specialClosures, specialOpenings, use
       endMins = parseTime(openingOnDate.end);
     } else {
       // 否則就照常判斷平日或假日
-      startMins = isWeekend ? parseTime(settings.weekendStart || "10:00") : parseTime(settings.weekdayStart || "17:30"); 
+      startMins = isWeekend ? parseTime(settings.weekendStart || "10:00") : parseTime(settings.weekdayStart || "17:00"); 
       endMins = isWeekend ? parseTime(settings.weekendEnd || "17:00") : parseTime(settings.weekdayEnd || "20:00");
     }
 
