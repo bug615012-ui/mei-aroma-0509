@@ -31,7 +31,7 @@ const SERVICES = [
 ];
 
 const INITIAL_SETTINGS = {
-  weekdayStart: '17:30',
+  weekdayStart: '17:00',
   weekdayEnd: '20:00',
   weekdayBreakStart: '',
   weekdayBreakEnd: '',
