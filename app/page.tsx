@@ -379,7 +379,7 @@ function BookingFlow({ settings, bookings, specialClosures, specialOpenings, use
             <div className="space-y-4 text-gray-600 bg-gray-50/50 p-6 md:p-8 rounded-[2rem] border border-gray-100/50 text-left text-sm md:text-base leading-relaxed">
               <p>為確保老師時段安排，<strong className="text-green-700">預約需先完成全額付款</strong>，款項將作為本次服務之預付費用。</p>
               <p>如需取消或改期，請於 <strong className="text-green-700">服務前 24 小時以前</strong> 告知，可免費改期一次，改期後服務日期須安排於原預約日起 30 日內；亦可申請退款。</p>
-              <p>若於服務前 24 小時內取消、臨時改期，或當日未到，因老師已為您保留專屬時段，將扣除時段保留費 $500，餘額可選擇保留為下次使用或申請退還。<strong className="text-green-700">預約保留費以 $500 為上限</strong>，若該次服務金額低於 $1,500，則以服務金額 40% 為預約保留費上限。優惠期間預約保留費一律以 $499 計算</p>
+              <p>若於服務前 24 小時內取消、臨時改期，或當日未到，因老師已為您保留專屬時段，將扣除時段保留費 $500，餘額可選擇保留為下次使用或申請退還。<strong className="text-green-700">預約保留費以 $500 為上限</strong>，若該次服務金額低於 $1,500，則以服務金額 40% 為預約保留費上限。優惠期間預約保留費一律以 $499 計算。</p>
               <p>若因天災、突發重大事故、身體急症等不可抗力因素導致無法如期前來，請於可聯繫時主動告知並提供相關說明，工作室將協助彈性改期一次，原則上不扣除預約保留費，感謝您的體諒。</p>
             </div>
             <button onClick={() => setStep(1)} className="w-full bg-green-700 hover:bg-green-800 text-white font-black py-5 rounded-2xl active:scale-95 transition-all shadow-lg shadow-green-100 mt-8">開始預約</button>
