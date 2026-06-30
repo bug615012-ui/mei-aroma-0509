@@ -380,7 +380,7 @@ function BookingFlow({ settings, bookings, specialClosures, specialOpenings, use
               <p>為確保老師時段安排，<strong className="text-green-700">預約需先完成全額付款</strong>，款項將作為本次服務之預付費用。</p>
               <p>如需取消或改期，請於 <strong className="text-green-700">服務前 24 小時之前</strong> 告知，可免費改期一次，改期後服務日期須安排於原預約日起 30 日內。</p>
               <p>若於服務前 24 小時內取消、臨時改期，或當日未到，因已為您保留專屬時段，<strong className="text-green-700">將扣除時段保留費，餘額可保留為下次使用</strong>。時段保留費依預約項目計算：服務金額 $1,500 之項目，時段保留費為 $500；服務金額未滿 $1,500 之項目，時段保留費為 $350。</p>
-              <p>若因天災、突發重大事故等不可抗力因素導致無法前來，工作室將協助彈性改期一次，原則上不扣除預約保留費，感謝您的體諒。</p>
+              <p>若因天災、突發重大事故等不可抗力因素導致無法前來，工作室將協助彈性改期一次，原則上不扣除時段保留費，感謝您的體諒。</p>
             </div>
             <button onClick={() => setStep(1)} className="w-full bg-green-700 hover:bg-green-800 text-white font-black py-5 rounded-2xl active:scale-95 transition-all shadow-lg shadow-green-100 mt-8">開始預約</button>
           </div>
